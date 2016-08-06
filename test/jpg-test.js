@@ -28,7 +28,7 @@ function defish2(src, dst, strength, zoom) {
 	
 	var r = Math.floor(Math.sqrt(width*width + height*height) / 2);
 
-	var dist = r * 2 / 2.7;//* strength;
+	var dist = r * 2 / strength;
 	var r2 = r*r;
 
 	for (var x=0; x<width; x++) {
@@ -137,9 +137,10 @@ function defish(src, dst, strength, zoom) {
 var dstRawData = {data:dstData, width:width, height:height};
 
 if (filter == 1) {
-	defish(rawData, dstRawData, 5.26, 1.86);
+	defish(rawData, dstRawData, 3.1, 1.55);//5.26, 1.86);
 } else {
-	defish2(rawData, dstRawData, 6, 1.5);
+	//defish2(rawData, dstRawData, 1.95, 1.5);
+	defish2(rawData, dstRawData, 1.95, 1.5);
 }
 
 var dstJpgData = jpg.encode(dstRawData, 90);

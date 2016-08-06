@@ -9,7 +9,6 @@ var WII_ADDRESS = '/var/tmp/wii.sock';
 
 var width = 1024, height = 768;
 
-// unix socket
 // wii ir dots 
 var dot_history = [[],[],[],[]];
 function dot_score(dot, dotlist) {
@@ -21,7 +20,7 @@ function dot_score(dot, dotlist) {
 	return score;
 }
 
-function defish2(x, y, zoom) {
+function defish(x, y, zoom) {
 	// center
 	var midx = width / 2;
 	var midy = height / 2;
@@ -67,14 +66,14 @@ function defish2(x, y, zoom) {
 	return new Vector2(sx, sy);
 }
 
-
+// unix socket
 var server = net.createServer(function(sock) {
 	sock.on('data', function(data){
 		try {
 			var dot_raw = JSON.parse(data.toString());
 			var dots = [], scores = [], slots = [];
 			for (var i=0; i<dot_raw.length; i+=3) {
-				var dot = {pos2d:defish2(dot_raw[i],dot_raw[i+1],1.5), size:dot_raw[i+2], guess:false};
+				var dot = {pos2d:defish(dot_raw[i],dot_raw[i+1],1.5), size:dot_raw[i+2], guess:false};
 				var score = [];
 
 				// dot against history, find scores
@@ -146,8 +145,15 @@ server.listen(WII_ADDRESS);
 // serial ports
 // head & clip orientations
 var qclip = new Quaternion();
+var gclip = new Vector3();
+var aclip = new Vector3();
+
 var qhead = new Quaternion();
+var ghead = new Vector3();
+var ahead = new Vector3();
+
 var qrel = new Quaternion();
+
 var clip_angle = 0;
 var irMask = new Buffer(1);
 
@@ -164,44 +170,79 @@ SerialPort.list(function(err,ports){
 
 			port.on('data', function(data){
 				/*
-				 * data[0] = '$';
-				 * data[1] = PACKET_QUAT;
-				 * data[2] = CLIP(1)/HEAD(2);
-				 * 
-				 * data[3] = (char)(quat[0] >> 24);
-				 * data[4] = (char)(quat[0] >> 16);
-				 * data[5] = (char)(quat[0] >> 8);
-				 * data[6] = (char)quat[0];
-				 *
-				 * data[7] = (char)(quat[1] >> 24);
-				 * data[8] = (char)(quat[1] >> 16);
-				 * data[9] = (char)(quat[1] >> 8);
-				 * data[10] = (char)quat[1];
-				 *
-				 * data[11] = (char)(quat[2] >> 24);
-				 * data[12] = (char)(quat[2] >> 16);
-				 * data[13] = (char)(quat[2] >> 8);
-				 * data[14] = (char)quat[2];
-				 *
-				 * data[15] = (char)(quat[3] >> 24);
-				 * data[16] = (char)(quat[3] >> 16);
-				 * data[17] = (char)(quat[3] >> 8);
-				 * data[18] = (char)quat[3];
-				 *
-				 * data[21] = 0;//(char)(angle - 470);
-				 * data[22] = '\r';
-				 * data[23] = '\n';
-				 */
-				if (data.length === 24) {	 
+				  out[0] = '$';
+				  out[1] = PACKET_QUAT;
+				  out[2] = HEAD;
+
+				  // quat
+				  out[3] = (char)(quat[0] >> 24);
+				  out[4] = (char)(quat[0] >> 16);
+				  out[5] = (char)(quat[0] >> 8);
+				  out[6] = (char)quat[0];
+				  out[7] = (char)(quat[1] >> 24);
+				  out[8] = (char)(quat[1] >> 16);
+				  out[9] = (char)(quat[1] >> 8);
+				  out[10] = (char)quat[1];
+				  out[11] = (char)(quat[2] >> 24);
+				  out[12] = (char)(quat[2] >> 16);
+				  out[13] = (char)(quat[2] >> 8);
+				  out[14] = (char)quat[2];
+				  out[15] = (char)(quat[3] >> 24);
+				  out[16] = (char)(quat[3] >> 16);
+				  out[17] = (char)(quat[3] >> 8);
+				  out[18] = (char)quat[3];
+
+				  // gyro
+				  out[19] = (char)(gyro[0] >> 24);
+				  out[20] = (char)(gyro[0] >> 16);
+				  out[21] = (char)(gyro[0] >> 8);
+				  out[22] = (char)gyro[0];
+				  out[23] = (char)(gyro[1] >> 24);
+				  out[24] = (char)(gyro[1] >> 16);
+				  out[25] = (char)(gyro[1] >> 8);
+				  out[26] = (char)gyro[1];
+				  out[27] = (char)(gyro[2] >> 24);
+				  out[28] = (char)(gyro[2] >> 16);
+				  out[29] = (char)(gyro[2] >> 8);
+				  out[30] = (char)gyro[2];
+
+				  // linear accel
+				  out[31] = (char)(accel[0] >> 24);
+				  out[32] = (char)(accel[0] >> 16);
+				  out[33] = (char)(accel[0] >> 8);
+				  out[34] = (char)accel[0];
+				  out[35] = (char)(accel[1] >> 24);
+				  out[36] = (char)(accel[1] >> 16);
+				  out[37] = (char)(accel[1] >> 8);
+				  out[38] = (char)accel[1];
+				  out[39] = (char)(accel[2] >> 24);
+				  out[40] = (char)(accel[2] >> 16);
+				  out[41] = (char)(accel[2] >> 8);
+				  out[42] = (char)accel[2];
+
+				  // angle
+				  out[43] = 0;
+
+				  // done
+				  out[44] = '\r';
+				  out[45] = '\n';
+				*/
+				if (data.length === 46) {	 
 					var buf = new Buffer(data);
 					var q = new Quaternion(buf.readFloatBE(7), buf.readFloatBE(15), -buf.readFloatBE(11), buf.readFloatBE(3));
+					var g = new Vector3(buf.readFloatBE(19), buf.readFloatBE(27), -buf.readFloatBE(23));
+					var a = new Vector3(buf.readFloatBE(31), buf.readFloatBE(39), -buf.readFloatBE(35));
 
 					if (data[2] == 1) {	// clip
 						qclip.copy(q);
-						clip_angle = data[21] / 255;
+						gclip.copy(g);
+						aclip.copy(a);
+						clip_angle = data[43] / 255;
 						port.write(irMask);
 					} else if (data[2] == 2) {	// head
 						qhead.copy(q);
+						ghead.copy(g);
+						ahead.copy(a);
 					}
 
 					var qh = qhead.clone();
@@ -213,14 +254,14 @@ SerialPort.list(function(err,ports){
 });
 
 var scene = new THREE.Scene();
-var camera = new THREE.PerspectiveCamera(120, width/height, 0.1, 1000);
+var camera = new THREE.PerspectiveCamera(130, width/height, 0.1, 1000);
 
 var renderer = new THREE.WebGLRenderer({
 	width: width,
 	height: height
 });
 
-var geometry = new THREE.BoxGeometry(1, 2, 3);
+var geometry = new THREE.BoxGeometry(2, 2, 3);
 var material = new THREE.MeshBasicMaterial();
 var cube = new THREE.Mesh(geometry, material);
 cube.visible = false;
@@ -233,7 +274,7 @@ var colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00];
 //LED
 var leds = [];
 var led_geom = new THREE.BoxGeometry(0.1,0.1,0.1);
-var led_pos = [new Vector3(-1, 0, -1), new Vector3(-1, 0, 1), new Vector3(1, -1, 0), new Vector3(1, 1, 0)];
+var led_pos = [new Vector3(-2, 0, -1), new Vector3(-2, 0, 1), new Vector3(2, -1, 0), new Vector3(2, 1, 0)];
 for (var i=0; i<4; i++) {
 	var led = new THREE.Mesh(led_geom, new THREE.MeshBasicMaterial({wireframe:true}));
 	leds.push(led);
@@ -263,7 +304,21 @@ for (var i=0; i<4; i++) {
 	dots.push(dot);
 }
 
-function test_update_ir_dots () {
+function get_screen_coord(obj){
+	var widthHalf = width / 2, heightHalf = height / 2;
+
+	var vector = new Vector3();
+	vector.setFromMatrixPosition( obj.matrixWorld );
+	vector.project(camera);
+
+	vector.x = ( vector.x * widthHalf ) + widthHalf;
+	vector.y = - ( vector.y * heightHalf ) + heightHalf;	
+
+	return new Vector2(vector.x, vector.y);
+}
+
+function update_dots() {
+	// first guess
 	var avgx = 0, avgy = 0, cnt = 0;
 	var miny = 1e10, maxy = -1e10;
 	for (var i=0; i<4; i++) {
@@ -296,9 +351,30 @@ function test_update_ir_dots () {
 		avgx /= cnt;
 		avgy /= cnt;
 		cube.position.set(avgx, avgy, 0);
-		var h = maxy - miny;
-		if (h < 1) h = 1;
-		cube.scale.set(h/2,1,1);
+//		var h = maxy - miny;
+//		if (h < 1) h = 1;
+//		cube.scale.set(h/2,1,1);
+
+		// second guess
+		cube.updateMatrixWorld();
+
+		// get screen pos of dots
+		var pos_list = [];
+		for (var i=0; i<dots.length; i++) {
+			pos_list.push(get_screen_coord(dots[i]));
+		}
+
+		// find marching dots
+
+		// 1. march position
+
+		// 2. march edge
+		var edge1 = new Vector2();
+		var edge2 = new Vector2();
+		edge1.subVectors(pos_list[1], pos_list[0]);
+		edge2.subVectors(pos_list[3], pos_list[2]);
+
+		// moves them there
 	}
 
 	for (var i=cnt; i<4; i++) {
@@ -311,7 +387,7 @@ var render = function () {
 
 	cube.setRotationFromQuaternion(qrel);
 
-	test_update_ir_dots();
+	update_dots();
 
 	renderer.render(scene, camera);
 };
