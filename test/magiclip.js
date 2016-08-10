@@ -6,6 +6,7 @@ var SerialPort = require('serialport');
 var fs = require('fs');
 var net = require('net');
 var WII_ADDRESS = '/var/tmp/wii.sock';
+var regression = require('regression');
 
 var width = 1024, height = 768;
 
@@ -20,7 +21,10 @@ function dot_score(dot, dotlist) {
 	return score;
 }
 
-function defish(x, y, zoom) {
+function defish(x, y) {
+	var strength = 1.95;
+	var zoom = 1.5;
+
 	// center
 	var midx = width / 2;
 	var midy = height / 2;
@@ -28,7 +32,7 @@ function defish(x, y, zoom) {
 	
 	var r = Math.floor(Math.sqrt(width*width + height*height) / 2);
 
-	var dist = r * 2 / 2.7;
+	var dist = r * 2 / strength;
 	var r2 = r*r;
 
 	var nx = x - midx;
@@ -73,7 +77,7 @@ var server = net.createServer(function(sock) {
 			var dot_raw = JSON.parse(data.toString());
 			var dots = [], scores = [], slots = [];
 			for (var i=0; i<dot_raw.length; i+=3) {
-				var dot = {pos2d:defish(dot_raw[i],dot_raw[i+1],1.5), size:dot_raw[i+2], guess:false};
+				var dot = {pos2d:defish(dot_raw[i],dot_raw[i+1]), size:dot_raw[i+2], guess:false};
 				var score = [];
 
 				// dot against history, find scores
@@ -237,8 +241,8 @@ SerialPort.list(function(err,ports){
 						qclip.copy(q);
 						gclip.copy(g);
 						aclip.copy(a);
-						clip_angle = data[43] / 255;
-						port.write(irMask);
+//						clip_angle = data[43] / 255;
+//						port.write(irMask);
 					} else if (data[2] == 2) {	// head
 						qhead.copy(q);
 						ghead.copy(g);
@@ -254,31 +258,36 @@ SerialPort.list(function(err,ports){
 });
 
 var scene = new THREE.Scene();
-var camera = new THREE.PerspectiveCamera(130, width/height, 0.1, 1000);
+var camera = new THREE.PerspectiveCamera(63, 56/38, 0.1, 1000);
 
 var renderer = new THREE.WebGLRenderer({
 	width: width,
 	height: height
 });
+THREE.document.setTitle('magiclip');
 
-var geometry = new THREE.BoxGeometry(2, 2, 3);
+var CUBE_LENGTH = 19.2;
+var RANGE = 40;
+var geometry = new THREE.BoxGeometry(CUBE_LENGTH, 0.8, 0.8);
 var material = new THREE.MeshBasicMaterial();
 var cube = new THREE.Mesh(geometry, material);
 cube.visible = false;
+cube.position.set(0,0,-31.8);
 scene.add(cube);
 var wireCube = new THREE.BoxHelper(cube);
 scene.add(wireCube);
 
 var colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00];
+var sim_colors = [0x880000, 0x008800, 0x000088, 0x888800];
 
 //LED
 var leds = [];
-var led_geom = new THREE.BoxGeometry(0.1,0.1,0.1);
-var led_pos = [new Vector3(-2, 0, -1), new Vector3(-2, 0, 1), new Vector3(2, -1, 0), new Vector3(2, 1, 0)];
+var led_geom = new THREE.BoxGeometry(1,1,1);
+var led_pos = [new Vector3(-9.6, 0, 0), new Vector3(-3.2, 0, 0), new Vector3(3.2, 0, 0), new Vector3(9.6, 0, 0)];
 for (var i=0; i<4; i++) {
 	var led = new THREE.Mesh(led_geom, new THREE.MeshBasicMaterial({wireframe:true}));
 	leds.push(led);
-	led.scale.set(1.5,1.5,1.5);
+//	led.scale.set(1.5,1.5,1.5);
 	led.position.copy(led_pos[i]);
 	led.material.color.setHex(colors[i]);
 	wireCube.add(led);
@@ -291,17 +300,25 @@ for (var i=0; i<4; i++) {
 	*/
 }
 
-camera.position.z = 5;
+camera.position.set(0,0,1);
+camera.up.set(0,0,1);
 
 // dots
 var dots = [];
-var dot_geom = new THREE.BoxGeometry(0.1,0.1,0.1);
+var sim_dots = [];
+var dot_geom = new THREE.BoxGeometry(0.01,0.01,0.01);
+var sim_dot_geom = new THREE.BoxGeometry(1,1,1);
 for (var i=0; i<4; i++) {
 	var dot = new THREE.Mesh(dot_geom, new THREE.MeshBasicMaterial());
+	var sim_dot = new THREE.Mesh(sim_dot_geom, new THREE.MeshBasicMaterial());
 	dot.visible = false;
+	sim_dot.visible = true;
 	dot.material.color.setHex(colors[i]);
+	sim_dot.material.color.setHex(sim_colors[i]);
 	scene.add(dot);
+	scene.add(sim_dot);
 	dots.push(dot);
+	sim_dots.push(sim_dot);
 }
 
 function get_screen_coord(obj){
@@ -317,7 +334,197 @@ function get_screen_coord(obj){
 	return new Vector2(vector.x, vector.y);
 }
 
+function world_to_screen (w) {
+	var widthHalf = width / 2, heightHalf = height / 2;
+
+	var vector = w.clone();
+	vector.project(camera);
+
+	vector.x = ( vector.x * widthHalf ) + widthHalf;
+	vector.y = - ( vector.y * heightHalf ) + heightHalf;	
+
+	return new Vector2(vector.x, vector.y);
+
+}
+
+function screen_to_world (s) {
+	var vector = new THREE.Vector3();
+	vector.set(s.x/width*2-1, 1-s.y/height*2, 0.5);
+	vector.unproject( camera );
+	var dir = vector.sub( camera.position ).normalize();
+	var distance = - camera.position.z / dir.z;
+	var pos = camera.position.clone().add( dir.multiplyScalar( distance ) );
+	return pos;
+}
+
+var line_geom = new THREE.BufferGeometry();
+var line_pos = new Float32Array(2*3);
+line_geom.addAttribute('position', new THREE.BufferAttribute(line_pos, 3));
+var line_mat = new THREE.LineBasicMaterial({color:0xffffff, linewidth:2});
+var source_line = new THREE.Line(line_geom, line_mat);
+scene.add(source_line);
+
+function update_line(line, p1, p2) {
+	var p = line.geometry.attributes.position;
+	var pos = p.array;
+	pos[0] = p1.x;
+	pos[1] = p1.y;
+	pos[2] = 0;
+	pos[3] = p2.x;
+	pos[4] = p2.y;
+	pos[5] = 0;
+	p.needsUpdate = true;
+}
+
+function intersect_sphere_line(sphere, line){
+    var a, b, c, d, u1, u2, ret, retP1, retP2, v1, v2, tmpv1;
+    v1 = new Vector3();
+    v2 = new Vector3();
+	v1.subVectors(line.p2, line.p1);
+	v2.subVectors(line.p1, sphere.center);
+    var b = -2 * v1.dot(v2);
+    var c = 2 * v1.lengthSq();
+    d = Math.sqrt(b * b - 2 * c * (v2.lengthSq() - sphere.radius * sphere.radius));
+    if(isNaN(d)){ // no intercept
+        return [];
+    }
+    u1 = (b - d) / c;  // these represent the unit distance of point one and two on the line
+    u2 = (b + d) / c;    
+    retP1 = new Vector3();   // return points
+    retP2 = new Vector3();  
+    ret = []; // return array
+    if(u1 <= 1 && u1 >= 0){  // add point if on the line segment
+		tmpv1 = v1.clone();
+		tmpv1.multiplyScalar(u1);
+		retP1.addVectors(line.p1, tmpv1);
+        ret[0] = retP1;
+    }
+    if(u2 <= 1 && u2 >= 0){  // second add point if on the line segment
+		tmpv1 = v1.clone();
+		tmpv1.multiplyScalar(u2);
+		retP2.addVectors(line.p1, tmpv1);
+        ret[ret.length] = retP2;
+    }       
+    return ret;
+}
+
 function update_dots() {
+	var line = [];
+	var target_dots = [];
+	for (var i=0; i<4; i++) {
+		var history = dot_history[i];
+		if (history.length > 0) {
+			var d = history[history.length-1];
+			var dot = dots[i];
+			dot.visible = true;
+			var pos = screen_to_world(d.pos2d);
+			dot.position.copy(pos);
+			if (d.guess) {
+				dot.scale.set(0.5,0.5,0.5);
+			} else {
+				line.push([pos.x,pos.y]);
+				target_dots[i] = d.pos2d;
+				dot.scale.set(d.size, d.size, d.size);
+			}
+		}
+	}
+	if (line.length >= 2) {
+		var result = regression('linear', line);
+
+		// find major axis
+		var k = result.equation[0];
+		var major_axis = k>1||k<-1 ? 1 : 0;
+
+		// sort points along axis
+		var points = [];
+		for (var i=0; i<result.points.length; i++) {
+			var p = result.points[i];
+			points.push({pos:new Vector3(p[0],p[1],0), idx:i});
+		}
+		points.sort(function(p1,p2){
+			return p1.pos.getComponent(major_axis) - p2.pos.getComponent(major_axis);
+		});
+
+		// find 2 end points (in world space)
+		var begin_points = [points[0].pos, points[points.length-1].pos];
+		update_line(source_line, begin_points[0], begin_points[1]);
+
+		// cast end points (to 2 lines)
+		var end_points = [new Vector3(), new Vector3()];
+		for (var i=0; i<2; i++) {
+			var p = end_points[i];
+			p.subVectors(begin_points[i], camera.position);
+			p.normalize();
+			p.multiplyScalar(RANGE);
+			p.add(begin_points[i]);
+		}
+
+		// for each point A on line 1, find another point B on line 2, so that dist(A,B) == CUBE_LENGTH
+		// intersect(sphere(center=A,r=CUBE_LENGTH), line2)
+		if (points.length === 4) {
+			var sphere = {center:new Vector3, radius:CUBE_LENGTH};
+			var line = {p1:begin_points[1], p2:end_points[1]};
+			var offset = new Vector3;
+			var inter;
+			var p1, p2, p3, p4, p4p1=new Vector3;
+			var proj_points = [];
+			console.log('-----------------');
+			var min_err = 1e10;
+			var min_points = [];
+			var min_proj = [];
+			var tmpv = new Vector3;
+			for (var f=0; f<=1; f+=0.01) {
+				sphere.center.copy(begin_points[0]);
+				offset.subVectors(end_points[0], begin_points[0]);
+				offset.multiplyScalar(f);
+				sphere.center.add(offset);
+				inter = intersect_sphere_line(sphere,line);
+				if (inter.length > 0) {
+					// find the best fit
+					p1 = sphere.center;
+					for (var i=0; i<inter.length; i++) {
+						p4 = inter[i];
+						p4p1.subVectors(p4, p1);
+						p4p1.multiplyScalar(1/3);
+						p2 = sphere.center.clone();
+						p2.add(p4p1);
+						p3 = p2.clone();
+						p3.add(p4p1);
+
+						// project them on to screen
+						proj_points[0] = world_to_screen(p1);
+						proj_points[1] = world_to_screen(p2);
+						proj_points[2] = world_to_screen(p3);
+						proj_points[3] = world_to_screen(p4);
+					}
+
+					var err = 0;
+					var idx;
+					for (var i=0; i<4; i++) {
+						idx = points[i].idx;
+						err += target_dots[idx].distanceToSquared(proj_points[i]);
+					}
+					if (err < min_err) {
+						min_err = err;
+						min_points = [p1.clone(),p2.clone(),p3.clone(),p4.clone()];
+						min_proj = [proj_points[0].clone(), proj_points[1].clone(),proj_points[2].clone(),proj_points[3].clone()];
+					}
+				}
+			}
+			if (min_points.length>0) {
+				var original_dots = [];
+				for (var i=0; i<4; i++) {
+					var idx = points[i].idx;
+					original_dots[i] = target_dots[idx];
+					sim_dots[idx].position.copy(min_points[i]);
+				}
+				console.log('err:',min_err);
+			}
+		}
+	}
+}
+
+function update_dots_old() {
 	// first guess
 	var avgx = 0, avgy = 0, cnt = 0;
 	var miny = 1e10, maxy = -1e10;
@@ -385,7 +592,8 @@ function update_dots() {
 var render = function () {
 	THREE.requestAnimationFrame(render);
 
-	cube.setRotationFromQuaternion(qrel);
+
+//	cube.setRotationFromQuaternion(qrel);
 
 	update_dots();
 
