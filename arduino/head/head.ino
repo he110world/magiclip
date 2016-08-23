@@ -2,77 +2,139 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
+#include <EEPROM.h>
 
-/* This driver reads raw data from the BNO055
+/* This driver uses the Adafruit unified sensor library (Adafruit_Sensor),
+   which provides a common 'type' for sensor data and some helper functions.
+
+   To use this driver you will also need to download the Adafruit_Sensor
+   library and include it in your libraries folder.
+
+   You should also assign a unique ID to this sensor for use with
+   the Adafruit Sensor API so that you can identify this particular
+   sensor in any data logs, etc.  To assign a unique ID, simply
+   provide an appropriate value in the constructor below (12345
+   is used by default in this example).
 
    Connections
    ===========
    Connect SCL to analog 5
    Connect SDA to analog 4
-   Connect VIN to 5V DC
-   Connect ADO to GND
+   Connect VDD to 3-5V DC
+   Connect GROUND to common ground
 
    History
    =======
    2015/MAR/03  - First release (KTOWN)
-*/
+   2015/AUG/27  - Added calibration and system status helpers
+   2015/NOV/13  - Added calibration save and restore
+   */
 
 /* Set the delay between fresh samples */
-#define BNO055_SAMPLERATE_DELAY_MS (10)
+#define BNO055_SAMPLERATE_DELAY_MS (100)
 
-Adafruit_BNO055 bno = Adafruit_BNO055();
-
-#define ANGLE_PIN   3
-#define CLIP        1
-#define HEAD        2
+Adafruit_BNO055 bno = Adafruit_BNO055(55);
 
 /**************************************************************************/
 /*
     Arduino setup function (automatically called at startup)
-*/
+    */
 /**************************************************************************/
 void setup(void)
 {
-  Serial.begin(115200);
-  //Serial.println("Orientation Sensor Raw Data Test"); Serial.println("");
+    pinMode(13, OUTPUT);
+    Serial.begin(115200);
+    //delay(1000);
 
-  /* Initialise the sensor */
-  if (!bno.begin())
-  {
-    /* There was a problem detecting the BNO055 ... check your connections */
-    //Serial.println("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
-    while (1);
-  }
+    /* Initialise the sensor */
+    if (!bno.begin())
+    {
+        while (1);
+    }
 
-  delay(1000);
+    int eeAddress = 0;
+    long bnoID;
+    bool foundCalib = false;
+    EEPROM.get(eeAddress, bnoID);
 
-  /* Display the current temperature */
-  /*
-  int8_t temp = bno.getTemp();
-  Serial.print("Current Temperature: ");
-  Serial.print(temp);
-  Serial.println(" C");
-  Serial.println("");
-  */
+    adafruit_bno055_offsets_t calibrationData;
+    sensor_t sensor;
 
-  bno.setExtCrystalUse(true);
+    /*
+    *  Look for the sensor's unique ID at the beginning oF EEPROM.
+    *  This isn't foolproof, but it's better than nothing.
+    */
+    bno.getSensor(&sensor);
+    if (bnoID != sensor.sensor_id)
+    {
+        //No Calibration Data for this sensor exists in EEPROM
+        delay(500);
+    }
+    else
+    {
+        //Found Calibration for this sensor in EEPROM.
+        eeAddress += sizeof(long);
+        EEPROM.get(eeAddress, calibrationData);
 
-  //Serial.println("Calibration status values: 0=uncalibrated, 3=fully calibrated");
+        //Restoring Calibration data to the BNO055
+        //bno.setSensorOffsets(calibrationData);
+
+        //Calibration data loaded into BNO055
+        foundCalib = true;
+    }
+
+    delay(1000);
+
+    bno.setExtCrystalUse(true);
+
+    sensors_event_t event;
+    bno.getEvent(&event);
+    if (foundCalib){
+        //while (!bno.isFullyCalibrated())
+        {
+            bno.getEvent(&event);
+            delay(BNO055_SAMPLERATE_DELAY_MS);
+        }
+    }
+    else
+    {
+        while (!bno.isFullyCalibrated())
+        {
+            bno.getEvent(&event);
+            
+            //Wait the specified delay before requesting new data
+            delay(BNO055_SAMPLERATE_DELAY_MS);
+        }
+
+        adafruit_bno055_offsets_t newCalib;
+        bno.getSensorOffsets(newCalib);
+    
+        //Storing calibration data to EEPROM
+        eeAddress = 0;
+        bno.getSensor(&sensor);
+        bnoID = sensor.sensor_id;
+    
+        EEPROM.put(eeAddress, bnoID);
+    
+        eeAddress += sizeof(long);
+        EEPROM.put(eeAddress, newCalib);
+    }
+
+    digitalWrite(13, HIGH);
+    
+    delay(500);
 }
 
-/**************************************************************************/
-/*
-    Arduino loop function, called once 'setup' is complete (your own code
-    should go here)
-*/
-/**************************************************************************/
 #define PACKET_LENGTH   (46)
-
 #define PACKET_QUAT     (2)
+#define ANGLE_PIN   3
+#define BEACON_MIN  2
+#define BEACON_MAX  5
+#define CLIP        1
+#define HEAD        2
 
-void loop(void)
-{
-  // Quaternion data
+void loop() {
+// Quaternion data
   imu::Quaternion q = bno.getQuat();
   imu::Vector<3> g = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
   imu::Vector<3> a = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
@@ -155,6 +217,6 @@ void loop(void)
 
 
   Serial.write(out, PACKET_LENGTH);
-
-  delay(BNO055_SAMPLERATE_DELAY_MS);
+  delay(10);
 }
+

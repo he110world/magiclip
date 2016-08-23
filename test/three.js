@@ -243,6 +243,7 @@ var WebGL = require("node-webgl");
 var document = WebGL.document();
 module.exports = THREE;
 THREE.document = document;
+THREE.Image = WebGL.Image;
 
 // TODO: what is stored here?
 // Maybe we need to write something here?
@@ -1984,6 +1985,7 @@ THREE.Vector3.prototype = {
 			if ( matrix === undefined ) matrix = new THREE.Matrix4();
 
 			matrix.multiplyMatrices( camera.matrixWorld, matrix.getInverse( camera.projectionMatrix ) );
+
 			return this.applyProjection( matrix );
 
 		};
@@ -25955,7 +25957,7 @@ THREE.SpritePlugin = function ( renderer, sprites ) {
 			alphaTest:			gl.getUniformLocation( program, 'alphaTest' )
 		};
 
-		var canvas = document.createElement( 'canvas' );
+		/*var canvas = document.createElement( 'canvas' );
 		canvas.width = 8;
 		canvas.height = 8;
 
@@ -25965,6 +25967,7 @@ THREE.SpritePlugin = function ( renderer, sprites ) {
 
 		texture = new THREE.Texture( canvas );
 		texture.needsUpdate = true;
+		*/
 
 	};
 
@@ -26096,7 +26099,7 @@ THREE.SpritePlugin = function ( renderer, sprites ) {
 			gl.uniform3f( uniforms.color, material.color.r, material.color.g, material.color.b );
 
 			gl.uniform1f( uniforms.rotation, material.rotation );
-			gl.uniform2fv( uniforms.scale, scale );
+			gl.uniform2f( uniforms.scale, scale[0], scale[1] );
 
 			renderer.state.setBlending( material.blending, material.blendEquation, material.blendSrc, material.blendDst );
 			renderer.state.setDepthTest( material.depthTest );

@@ -408,9 +408,11 @@ function intersect_sphere_line(sphere, line){
     return ret;
 }
 
+var idx_to_order = [];
 function update_dots() {
 	var line = [];
 	var target_dots = [];
+	var idx_list = [];
 	for (var i=0; i<4; i++) {
 		var history = dot_history[i];
 		if (history.length > 0) {
@@ -423,11 +425,15 @@ function update_dots() {
 				dot.scale.set(0.5,0.5,0.5);
 			} else {
 				line.push([pos.x,pos.y]);
+				idx_list.push(i);
 				target_dots[i] = d.pos2d;
 				dot.scale.set(d.size, d.size, d.size);
 			}
 		}
 	}
+
+	var all_visible = line.length === 4;
+
 	if (line.length >= 2) {
 		var result = regression('linear', line);
 
@@ -439,8 +445,115 @@ function update_dots() {
 		var points = [];
 		for (var i=0; i<result.points.length; i++) {
 			var p = result.points[i];
-			points.push({pos:new Vector3(p[0],p[1],0), idx:i});
+			points.push({pos:new Vector3(p[0],p[1],0), idx:idx_list[i]});
 		}
+
+		//extrapolate the missing point
+		/*
+		if (idx_list.length === 2 && idx_to_order.length===4) {
+			// sort points by previous order
+			points.sort(function(p1,p2){
+				return idx_to_order[p1.idx] - idx_to_order[p2.idx];
+			});
+
+			var visible_indices = [];
+			var visible_orders = [];
+			for (var i=0; i<4; i++) {
+				if (idx_list.indexOf(i) !== -1) {
+					visible_indices.push(i);
+					visible_orders.push(idx_to_order[i]);
+				}
+			}
+			// order missing points
+			if (visible_orders[0] > visible_orders[1]) {
+				var tmp = visible_orders[0];
+				visible_orders[0] = visible_orders[1];
+				visible_orders[1] = tmp;
+			}
+
+			var dot_dist = CUBE_LENGTH / 3 * (visible_orders[1] - visible_orders[0]);
+
+			// get offset vector from 3d model
+			var cube_dots = [];
+			for (var i=0; i<4; i++) {
+				cube_dots[i] = new Vector3;
+				cube_dots[i].setFromMatrixPosition(leds[i].matrixWorld);
+			}
+			console.log(cube_dots);
+		}
+		*/
+
+			// get real world space position
+		if (idx_list.length === 3 && idx_to_order.length==4) {
+			// sort points by previous order
+			points.sort(function(p1,p2){
+				return idx_to_order[p1.idx] - idx_to_order[p2.idx];
+			});
+
+			var missing_idx = 3;
+			for (var i=0; i<3; i++) {
+				if (idx_list[i] != i) {
+					missing_idx = i;
+					break;
+				}
+			}
+			var newp = {pos:new Vector3, idx:missing_idx};
+			switch (idx_to_order[missing_idx]) {
+				case 0:	// A <- B C D:		AB = BC^2 / CD
+					var BC = new Vector3;
+					var CD = new Vector3;
+					BC.subVectors(points[1].pos, points[0].pos);
+					CD.subVectors(points[2].pos, points[1].pos);
+					var bc = BC.length();
+					var cd = CD.length();
+					var ab = bc*bc/cd;
+					newp.pos.subVectors(points[0].pos, BC.normalize().multiplyScalar(ab));
+					points.push(newp);
+					break;
+				case 1: // A -> B <- C D:	BC = (sqrt(CD*AD - 3*CD^2) - CD) / 2
+					var AD = new Vector3;
+					var CD = new Vector3;
+					AD.subVectors(points[2].pos, points[0].pos);
+					CD.subVectors(points[2].pos, points[1].pos);
+					var ad = AD.length();
+					var cd = CD.length();
+					var bc = (Math.sqrt(cd*ad - 3*cd*cd)-cd) / 2;
+					if (!isNaN(bc) && bc>0) {
+						newp.pos.subVectors(points[1].pos, CD.normalize().multiplyScalar(bc));
+						points.push(newp);
+					}
+					break;
+				case 2:	// A B -> C <- D:	BC = (sqrt(AB*AD - 3*AB^2) - AB) / 2
+					var AD = new Vector3;
+					var AB = new Vector3;
+					AD.subVectors(points[2].pos, points[0].pos);
+					AB.subVectors(points[1].pos, points[0].pos);
+					var ad = AD.length();
+					var ab = AB.length();
+					var bc = (Math.sqrt(ab*ad - 3*ab*ab)-ab) / 2;
+					if (!isNaN(bc) && bc>0) {
+						newp.pos.addVectors(points[1].pos, AB.normalize().multiplyScalar(bc));
+						points.push(newp);
+					}
+					break;
+				case 3:	// A B C -> D:		CD = BC^2 / AB
+					var BC = new Vector3;
+					var AB = new Vector3;
+					BC.subVectors(points[2].pos, points[1].pos);
+					AB.subVectors(points[1].pos, points[0].pos);
+					var bc = BC.length();
+					var ab = AB.length();
+					var cd = bc*bc/ab;
+					newp.pos.addVectors(points[2].pos, BC.normalize().multiplyScalar(cd));
+					points.push(newp);
+					break;
+			}
+
+			if (points.length === 4) {
+				target_dots[missing_idx] = world_to_screen(newp.pos);
+			}
+		}
+
 		points.sort(function(p1,p2){
 			return p1.pos.getComponent(major_axis) - p2.pos.getComponent(major_axis);
 		});
@@ -459,16 +572,24 @@ function update_dots() {
 			p.add(begin_points[i]);
 		}
 
+		if (points.length === 2 && idx_to_order.length===4) {
+			// get offset vector from 3d model
+			var cube_dots = [];
+			for (var i=0; i<4; i++) {
+				cube_dots[i] = new Vector3;
+				cube_dots[i].setFromMatrixPosition(leds[i].matrixWorld);
+			}
+			console.log(cube_dots);
+		} 
 		// for each point A on line 1, find another point B on line 2, so that dist(A,B) == CUBE_LENGTH
 		// intersect(sphere(center=A,r=CUBE_LENGTH), line2)
-		if (points.length === 4) {
+		else if (points.length === 4) {
 			var sphere = {center:new Vector3, radius:CUBE_LENGTH};
 			var line = {p1:begin_points[1], p2:end_points[1]};
 			var offset = new Vector3;
 			var inter;
 			var p1, p2, p3, p4, p4p1=new Vector3;
 			var proj_points = [];
-			console.log('-----------------');
 			var min_err = 1e10;
 			var min_points = [];
 			var min_proj = [];
@@ -515,12 +636,24 @@ function update_dots() {
 				var original_dots = [];
 				for (var i=0; i<4; i++) {
 					var idx = points[i].idx;
+					if (all_visible) {
+						idx_to_order[idx] = i;
+					}
 					original_dots[i] = target_dots[idx];
+					var history = dot_history[idx];
+					if (history.length > 0) {
+						var hist = history[history.length-1];
+						if (hist.guess) {
+							hist.pos2d.copy(min_proj[i]);
+						}
+					}
 					sim_dots[idx].position.copy(min_points[i]);
 				}
-				console.log('err:',min_err);
+//				console.log('err:',min_err);
 			}
+
 		}
+
 	}
 }
 
@@ -592,10 +725,17 @@ function update_dots_old() {
 var render = function () {
 	THREE.requestAnimationFrame(render);
 
-
-//	cube.setRotationFromQuaternion(qrel);
+	cube.setRotationFromQuaternion(qrel);
+	cube.updateMatrixWorld();
 
 	update_dots();
+
+	var test_center = new Vector3;
+	for (var i=0; i<4; i++) {
+		test_center.add(sim_dots[i].position);
+	}
+	test_center.multiplyScalar(0.25);
+	cube.position.copy(test_center);
 
 	renderer.render(scene, camera);
 };
