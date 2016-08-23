@@ -81,6 +81,10 @@ SerialPort.list(function(err,ports){
 	});
 });
 
+// config
+var config = {
+	show_model : false
+};
 // renderer
 var renderer = new THREE.WebGLRenderer({
 	width: width,
@@ -159,9 +163,10 @@ function DebugBox () {
 	this.mesh = new THREE.Mesh(this.geom, this.material);
 
 	this.mesh.position.set(0,0,-30);
+	this.mesh.visible = config.show_model;
+
 	scene.add(this.mesh);
 }
-var debug_box = new DebugBox();
 
 // crossbar model
 function DebugCrossBar () {
@@ -254,7 +259,7 @@ function CrossBar () {
 	//
 	this.q = new Quaternion();
 
-//	this.model.visible = false;
+	this.model.visible = config.show_model;
 }
 
 CrossBar.prototype.update_rotation = function(q) {
@@ -268,6 +273,7 @@ CrossBar.prototype.update_rotation = function(q) {
 	}
 };
 
+var test_rot = 0;
 CrossBar.prototype.update_sensor = function(data) {
 		/*
 	  out[0] = '$';
@@ -346,7 +352,10 @@ CrossBar.prototype.update_sensor = function(data) {
 		}
 
 		var qh = qhead.clone();
+		var test_q = new Quaternion;
+		test_q.setFromAxisAngle(new Vector3(0,0,1), test_rot);
 		qrel.multiplyQuaternions(qh.conjugate(), qclip);
+		qrel.multiply(test_q);
 	}
 };
 
@@ -532,6 +541,51 @@ DebugLine.prototype.set_pos = function(p1, p2) {
 	p.needsUpdate = true;
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////
+function Sampler (name) {
+	this.name = name || 'unnamed';
+	this.write_stream = fs.createWriteStream(this.name + '.json');
+	this.write_stream.write('[');
+	this.written = false;
+	var scope = this;
+	process.on('exit', function(){
+		scope.close();
+	});
+}
+
+Sampler.prototype.log = function(samp) {
+	if (!this.is_ready) return;
+
+	var str;
+	if (typeof samp === 'object') {
+		str = JSON.stringify(samp);
+	} else {
+		str = samp.toString();
+	}
+	if (this.written) {
+		str = ',\n' + str;
+	} else {
+		this.written = true;
+	}
+	this.write_stream.write(str);
+};
+
+Sampler.prototype.flush = function(samp) {
+	this.log(samp);
+	this.is_ready = false;
+};
+
+Sampler.prototype.close = function() {
+	this.write_stream.end(']');
+};
+
+Sampler.prototype.ready = function() {
+	this.is_ready = true;
+};
+
+var sampler = new Sampler('orientation-error');
+
+//////////////////////////////////////////////////////////////////////////////////////////
 var RANGE = 100;
 
 function PositionTracker () {
@@ -540,7 +594,13 @@ function PositionTracker () {
 	this.ir_dots = new IRDots();
 	this.debug_dots = {};
 	this.debug_lines = {};
+	this.debug_box = new DebugBox();
 }
+
+PositionTracker.prototype.toggle_debug = function() {
+	this.crossbar.model.visible = config.show_model;
+	this.debug_box.mesh.visible = config.show_model;
+};
 
 PositionTracker.prototype.translate = function(x,y,z) {
 	this.crossbar.model.position.add(new Vector3(x,y,z));
@@ -587,13 +647,15 @@ function rad2deg(r) {
 var test_euler = new THREE.Euler;
 var last_sx = 1;
 var last_sy = 1;
+var last_sz = 1;
+var MAX_ITER_CNT = 100;
 PositionTracker.prototype.update = function() {
 //	this.crossbar.model.setRotationFromQuaternion(qrel);
 	// point matching
-	this.crossbar.update_rotation(qrel);
-	this.debug_crossbar.update_rotation(qrel);
-
 	var ir_dots = this.ir_dots.get_current();
+	if (ir_dots.length === 0) return;
+
+	// find 'fresh' IR dots
 	var new_cnt = 0;
 	for (var i=0; i<ir_dots.length; i++) {
 		var dot = ir_dots[i];
@@ -602,54 +664,51 @@ PositionTracker.prototype.update = function() {
 		}
 	}
 
-	if (new_cnt === 4) {
-		// reorder dots
-		var center = new Vector2;
-		for (var i=0; i<4; i++) {
-			center.add(ir_dots[i].screen_pos);
+	// reorder dots
+	var ir_center = new Vector2;
+	for (var i=0; i<ir_dots.length; i++) {
+		ir_center.add(ir_dots[i].screen_pos);
+	}
+	ir_center.multiplyScalar(1/ir_dots.length);
+
+	// make points counterclockwise
+	ir_dots.sort(function(p1, p2){
+		var a = p1.screen_pos;
+		var b = p2.screen_pos;
+		if (a.x - ir_center.x >= 0 && b.x - ir_center.x < 0)
+			return -1;
+		if (a.x - ir_center.x < 0 && b.x - ir_center.x >= 0)
+			return 1;
+		if (a.x - ir_center.x == 0 && b.x - ir_center.x == 0) {
+			if (a.y - ir_center.y >= 0 || b.y - ir_center.y >= 0)
+				return b.y - a.y;
+			return a.y - b.y;
 		}
-		center.multiplyScalar(0.25);
 
-		// make points counterclockwise
-		ir_dots.sort(function(p1, p2){
-			var a = p1.screen_pos;
-			var b = p2.screen_pos;
-			if (a.x - center.x >= 0 && b.x - center.x < 0)
-				return -1;
-			if (a.x - center.x < 0 && b.x - center.x >= 0)
-				return 1;
-			if (a.x - center.x == 0 && b.x - center.x == 0) {
-				if (a.y - center.y >= 0 || b.y - center.y >= 0)
-					return b.y - a.y;
-				return a.y - b.y;
-			}
+	    // compute the cross product of vectors (center -> a) x (center -> b)
+	    var det = (a.x - ir_center.x) * (b.y - ir_center.y) - (b.x - ir_center.x) * (a.y - ir_center.y);
+	    if (det != 0)
+	    	return det;
 
-		    // compute the cross product of vectors (center -> a) x (center -> b)
-		    var det = (a.x - center.x) * (b.y - center.y) - (b.x - center.x) * (a.y - center.y);
-		    if (det != 0)
-		    	return det;
+	    // points a and b are on the same line from the center
+	    // check which point is closer to the center
+	    var d1 = (a.x - ir_center.x) * (a.x - ir_center.x) + (a.y - ir_center.y) * (a.y - ir_center.y);
+	    var d2 = (b.x - ir_center.x) * (b.x - ir_center.x) + (b.y - ir_center.y) * (b.y - ir_center.y);
+	    return d2 - d1;
+	});
 
-		    // points a and b are on the same line from the center
-		    // check which point is closer to the center
-		    var d1 = (a.x - center.x) * (a.x - center.x) + (a.y - center.y) * (a.y - center.y);
-		    var d2 = (b.x - center.x) * (b.x - center.x) + (b.y - center.y) * (b.y - center.y);
-		    return d2 - d1;
-		});
+	if (new_cnt === 3) {
 
-
+	} else if (new_cnt === 4) {
 		// cast IR dots
 		var ir_ends = [];
 		var ir_rays = [];
-		for (var i=0; i<4; i++) {
+		for (var i=0; i<ir_dots.length; i++) {
 			var dot = ir_dots[i];
 			var ray = new Vector3;
 			ray.subVectors(dot.world_pos, camera_saved.position);
 			ray.normalize();
 			ir_rays[i] = ray.clone();
-
-//			ray.multiplyScalar(RANGE);
-//			ir_ends[i] = new Vector3;
-//			ir_ends[i].addVectors(dot.world_pos, ray);
 		}
 
 		// crossbar plane
@@ -665,6 +724,7 @@ PositionTracker.prototype.update = function() {
 		var dcenter = new Vector3;
 		var local_x = new Vector3;
 		var local_y = new Vector3;
+		var local_z = new Vector3;
 		var axis_x = new Vector3;
 		var axis_y = new Vector3;
 		var dcenter2 = new Vector3;
@@ -673,7 +733,7 @@ PositionTracker.prototype.update = function() {
 		var min_dot = 1e10;
 		var min_idx = 0;
 		var min_dir;
-		for (var i=0; i<4; i++) {
+		for (var i=0; i<ir_rays.length; i++) {
 			var dir = new Vector3;
 			dir.crossVectors(ir_rays[i], ir_rays[(i+1)%4]);
 			dir.normalize();
@@ -691,9 +751,10 @@ PositionTracker.prototype.update = function() {
 		var last_choice = 0;	//x
 		var step_x = 0.01;
 		var step_y = 0.01;
+		var step_z = 0.01;
 
 //		test_euler.set(0,0,0);
-		for (iter_cnt=0; iter_cnt<100; iter_cnt++) {
+		for (iter_cnt=0; iter_cnt<MAX_ITER_CNT; iter_cnt++) {
 			crossbar_dir.set(0,0,1);
 			crossbar_dir.applyEuler(test_euler);
 			crossbar_dir.applyQuaternion(qrel);
@@ -761,14 +822,10 @@ PositionTracker.prototype.update = function() {
 				cast_center.addVectors(world_pos1, world_pos3x);
 				cast_center.multiplyScalar(0.5);
 
+				//correction
 				local_x = intersect_dir.clone();
 				local_y.crossVectors(crossbar_dir, intersect_dir);
-
-//				dcenter2.subVectors(world_pos3, center);
-//				var gx2 = dcenter2.dot(axis_x);
-//				var gy2 = dcenter2.dot(axis_y);
-//				var sx = Math.sign(gx2);
-//				var sy = Math.sign(gy2);
+				local_z = crossbar_dir.clone();
 
 				dcenter.subVectors(cast_center, center);
 				var dist_sq = dcenter.lengthSq();
@@ -777,49 +834,53 @@ PositionTracker.prototype.update = function() {
 				}
 				var gx = dcenter.dot(local_x);
 				var gy = dcenter.dot(local_y);
+				var gz = dcenter.dot(local_z);
 
-				if (gx*gx + gy*gy < 1e-4) break;
+				if (gx*gx + gy*gy + gz*gz< 1e-4) break;
 
-//				var sx = Math.sign(gx);
-//				var sy = Math.sign(gy);
 				var sx = last_sx;
 				var sy = last_sy;
+				var sz = last_sz;
+				var k = 1;
 				if (dist_sq > last_dist_sq) {
 					if (last_choice === 0) {
 						sx = -sx;
 						test_euler.x -= 2 * sx * step_x;
-					} else {
+					} else if (last_choice === 1) {
 						sy = -sy;
 						test_euler.y -= 2 * sy * step_y;
+					} else {
+						sz = -sz;
+						test_euler.z -= 2 * sz * step_z;
 					}
+				} else {
+					k = Math.sqrt(dist_sq / last_dist_sq);
 				}
 
-				if (Math.abs(gx) > Math.abs(gy)) {
+				var ax = Math.abs(gx);
+				var ay = Math.abs(gy);
+				var az = Math.abs(gz);
+				var amax = Math.max(ax,ay,az);
+				if (amax === ax) {
 					test_euler.x -= sx * step_x;
+					step_x *= k;//0.95;
 					last_choice = 0;
-				} else {
+				} else if (amax === ay) {
 					test_euler.y -= sy * step_y;
+					step_y *= k;//0.95;
 					last_choice = 1;
+				}
+				else {
+					test_euler.z -= sz * step_z;
+					step_z *= k;//0.95;
+					last_choice = 2;				
 				}
 				last_sx = sx;
 				last_sy = sy;
+				last_sz = sz;
 				last_dist_sq = dist_sq;
 			}
 		}
-
-//		console.log(crossbar_dir);
-
-//		console.log(gradient, iter_cnt);
-		// convert to screen space
-//		var screen_pos3 = world_to_screen(world_pos3);
-//		var screen_pos4 = world_to_screen(world_pos3);
-
-		// difference
-//		var diff3 = new Vector2;
-//		var diff4 = new Vector2;
-//		diff3.subVectors(screen_pos3, ir_dots[(min_idx+2)%4].screen_pos);
-//		diff4.subVectors(screen_pos4, ir_dots[(min_idx+3)%4].screen_pos);
-
 
 		this.debug_dot(world_pos1, 0xff00ff);
 		this.debug_dot(world_pos2, 0xf0000f);
@@ -842,11 +903,16 @@ PositionTracker.prototype.update = function() {
 		this.crossbar.model.position.copy(center);
 		controls.target.copy(center);
 
-//		var a1 = 180-cos2deg(cos1);
-//		var a2 = cos2deg(cos2);
-//		console.log(a1, a2, 180-a1-a2, cos2deg(ir_rays[min_idx].dot(ir_rays[(min_idx+1)%4])));
-//		console.log(test(ir_rays[0].dot(ir_rays[1])), test(ir_rays[1].dot(ir_rays[2])), test(ir_rays[2].dot(ir_rays[3])), test(ir_rays[3].dot(ir_rays[0])));
+		var sample = {dots:ir_dots, euler:test_euler, qrel:qrel};
+//		sampler.flush(sample);
+		sampler.log(sample);
 	}
+	if (iter_cnt >= 0) {
+		console.log(iter_cnt);
+	}
+
+	this.crossbar.update_rotation(qrel);
+	this.debug_crossbar.update_rotation(qrel);
 };
 
 PositionTracker.prototype.update_ir_sensor = function(data) {
@@ -983,6 +1049,16 @@ var render = function () {
 	if (keys['Z']) {
 		position_tracker.translate(0,-0.1,0);
 	}
+	// log
+	if (keys['L']) {
+		sampler.ready();
+	}
+
+	// show/hide model
+	if (keys['M']) {
+		config.show_model = !config.show_model;
+		position_tracker.toggle_debug();
+	}
 
 	// reset camera
 	if (keys['R']) {
@@ -1006,7 +1082,7 @@ app.ws('/test', function(ws, req) {
 	ws.on('message', function(msg) {
 		if (msg === 'init') {
 			ws.send(JSON.stringify({fov:camera.fov, aspect:camera.aspect, strength:fish_calib.strength, zoom:fish_calib.zoom, 
-				euler_x:test_euler.x,euler_y:test_euler.y,euler_z:test_euler.z
+				euler_x:test_euler.x,euler_y:test_euler.y,euler_z:test_euler.z,test_rot:test_rot
 			}));
 		} else {
 			var type_val = msg.split(':');
@@ -1020,6 +1096,8 @@ app.ws('/test', function(ws, req) {
 			} else if (type === 'euler_x' || type === 'euler_y' || type === 'euler_z') {
 				var axis = type.split('_')[1];
 				test_euler[axis] = val;
+			} else if (type === 'test_rot') {
+				test_rot = val;
 			}
 		}
 	});
