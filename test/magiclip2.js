@@ -747,11 +747,13 @@ PositionTracker.prototype.update = function() {
 		var ray1 = ir_rays[min_idx].clone();
 		var ray2 = ir_rays[(min_idx+1)%4].clone();
 
-		var last_dist_sq;
+		var first_dist_sq, last_dist_sq;
 		var last_choice = 0;	//x
+		var last_err = 0;
 		var step_x = 0.01;
 		var step_y = 0.01;
 		var step_z = 0.01;
+		var debug_str = '';
 
 //		test_euler.set(0,0,0);
 		for (iter_cnt=0; iter_cnt<MAX_ITER_CNT; iter_cnt++) {
@@ -778,7 +780,7 @@ PositionTracker.prototype.update = function() {
 
 			var rad1 = Math.PI - Math.acos(cos1);
 			var rad2 = Math.acos(cos2);
-			var rad = Math.acos(ray1.dot(ray2));//Math.PI - rad1 - rad2;
+			var rad = Math.acos(ray1.dot(ray2));
 
 			var k = target_d / Math.sin(rad);
 			var d1 = k * Math.sin(rad1);
@@ -830,7 +832,7 @@ PositionTracker.prototype.update = function() {
 				dcenter.subVectors(cast_center, center);
 				var dist_sq = dcenter.lengthSq();
 				if (last_dist_sq === undefined) {
-					last_dist_sq = dist_sq;
+					first_dist_sq = last_dist_sq = dist_sq;
 				}
 				var gx = dcenter.dot(local_x);
 				var gy = dcenter.dot(local_y);
@@ -843,17 +845,27 @@ PositionTracker.prototype.update = function() {
 				var sz = last_sz;
 				var k = 1;
 				if (dist_sq > last_dist_sq) {
+					debug_str += '-';
+
+					// prevent error ping pong:
+					// +x -> err -> -x -> err -> +x ...
+					var err_ping_pong = last_err === last_choice;
 					if (last_choice === 0) {
 						sx = -sx;
 						test_euler.x -= 2 * sx * step_x;
+						if (err_ping_pong) gx = 0;
 					} else if (last_choice === 1) {
 						sy = -sy;
 						test_euler.y -= 2 * sy * step_y;
+						if (err_ping_pong) gy = 0;
 					} else {
 						sz = -sz;
 						test_euler.z -= 2 * sz * step_z;
+						if (err_ping_pong) gz = 0;
 					}
+					last_err = last_choice;
 				} else {
+					debug_str += '+';
 					k = Math.sqrt(dist_sq / last_dist_sq);
 				}
 
@@ -863,22 +875,22 @@ PositionTracker.prototype.update = function() {
 				var amax = Math.max(ax,ay,az);
 				if (amax === ax) {
 					test_euler.x -= sx * step_x;
-					step_x *= k;//0.95;
+					step_x *= k;
 					last_choice = 0;
 				} else if (amax === ay) {
 					test_euler.y -= sy * step_y;
-					step_y *= k;//0.95;
+					step_y *= k;
 					last_choice = 1;
-				}
-				else {
+				} else {
 					test_euler.z -= sz * step_z;
-					step_z *= k;//0.95;
+					step_z *= k;
 					last_choice = 2;				
 				}
 				last_sx = sx;
 				last_sy = sy;
 				last_sz = sz;
 				last_dist_sq = dist_sq;
+				debug_str += last_choice;
 			}
 		}
 
@@ -908,7 +920,11 @@ PositionTracker.prototype.update = function() {
 		sampler.log(sample);
 	}
 	if (iter_cnt >= 0) {
-		console.log(iter_cnt);
+//		console.log(iter_cnt);
+		if (iter_cnt === MAX_ITER_CNT) {
+			console.log(Math.sqrt(first_dist_sq), Math.sqrt(last_dist_sq));
+			console.log(debug_str);
+		}
 	}
 
 	this.crossbar.update_rotation(qrel);
