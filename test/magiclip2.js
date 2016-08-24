@@ -83,7 +83,8 @@ SerialPort.list(function(err,ports){
 
 // config
 var config = {
-	show_model : false
+	show_model : false,
+	enable_correction : true
 };
 // renderer
 var renderer = new THREE.WebGLRenderer({
@@ -103,7 +104,7 @@ var camera = new THREE.PerspectiveCamera(63, 56/38, 0.01, 100);
 //var gui_camera = new THREE.OrthographicCamera(-width/2, width/2, height/2, -height/2, 0, 30 );
 
 camera.position.set(0,0,1);
-var camera_saved = camera.clone();//{position:camera.position.clone(), projectionMatrix:camera.projectionMatrix.clone(), matrixWorld:camera.matrixWorld.clone()};
+var camera_saved = camera.clone();
 
 var controls = new OrbitControls(camera, THREE.document);
 //controls.zoomSpeed = 0.1;
@@ -388,6 +389,7 @@ function FishEyeCalib () {
 	this.zoom = 1.5;
 }
 
+var CALIB_SCALE	= 1.13;
 FishEyeCalib.prototype.calib = function(x, y) {
 	// center
 	var midx = width / 2;
@@ -416,7 +418,7 @@ FishEyeCalib.prototype.calib = function(x, y) {
 		sy = y;
 	}
 
-	return new Vector2(sx, sy);
+	return new Vector2(sx, sy * CALIB_SCALE);	// a square is not a square after calibration: x/y=1.13, so we have to correct this
 }
 
 var fish_calib = new FishEyeCalib();
@@ -602,6 +604,14 @@ PositionTracker.prototype.toggle_debug = function() {
 	this.debug_box.mesh.visible = config.show_model;
 };
 
+PositionTracker.prototype.toggle_correction = function() {
+	if (config.enable_correction) {
+		MAX_ITER_CNT = 100;
+	} else {
+		MAX_ITER_CNT = 1;
+	}
+};
+
 PositionTracker.prototype.translate = function(x,y,z) {
 	this.crossbar.model.position.add(new Vector3(x,y,z));
 };
@@ -738,7 +748,8 @@ PositionTracker.prototype.update = function() {
 			dir.crossVectors(ir_rays[i], ir_rays[(i+1)%4]);
 			dir.normalize();
 			var d = Math.abs(dir.dot(crossbar_dir));
-			if (d < min_dot) {
+			if (ir_dots[i].idx == 0) {
+//			if (d < min_dot) {
 				min_dot = d;
 				min_idx = i;
 				min_dir	= dir.clone();
@@ -755,19 +766,33 @@ PositionTracker.prototype.update = function() {
 		var step_z = 0.01;
 		var debug_str = '';
 
+		// if top view, disable correction
+		crossbar_dir.set(0,0,1);
+		crossbar_dir.applyQuaternion(qrel);
+		var straight = Math.abs(crossbar_dir.dot(camera_saved.getWorldDirection()));
+		var iter_max;
+		if (straight > 0.9) {
+			iter_max = Math.max(1, Math.floor(Math.pow(1-straight,2) * 100 * MAX_ITER_CNT));
+//			iter_max = 1;
+			test_euler.set(0,0,0);
+		} else {
+			iter_max = MAX_ITER_CNT;
+		}
+
 //		test_euler.set(0,0,0);
-		for (iter_cnt=0; iter_cnt<MAX_ITER_CNT; iter_cnt++) {
+		for (iter_cnt=0; iter_cnt<iter_max; iter_cnt++) {
+			// when pointing at camera, crossbar_dir can be parallel to the direction of camera
 			crossbar_dir.set(0,0,1);
-			crossbar_dir.applyEuler(test_euler);
+			crossbar_dir.applyEuler(test_euler);	// euler.z is useless: euler_z((0,0,1), any_angle) === (0,0,1)
 			crossbar_dir.applyQuaternion(qrel);
 
-			axis_x.set(1,0,0);
-			axis_x.applyEuler(test_euler);
-			axis_x.applyQuaternion(qrel);
+			//axis_x.set(1,0,0);
+			//axis_x.applyEuler(test_euler);
+			//axis_x.applyQuaternion(qrel);
 
-			axis_y.set(0,1,0);
-			axis_y.applyEuler(test_euler);
-			axis_y.applyQuaternion(qrel);
+			//axis_y.set(0,1,0);
+			//axis_y.applyEuler(test_euler);
+			//axis_y.applyQuaternion(qrel);
 
 			// crossbar plane x side plane
 			intersect_dir.crossVectors(crossbar_dir, min_dir);
@@ -823,6 +848,8 @@ PositionTracker.prototype.update = function() {
 			if (world_pos3x) {
 				cast_center.addVectors(world_pos1, world_pos3x);
 				cast_center.multiplyScalar(0.5);
+
+				if (!config.enable_correction) break;
 
 				//correction
 				local_x = intersect_dir.clone();
@@ -1074,6 +1101,10 @@ var render = function () {
 	if (keys['M']) {
 		config.show_model = !config.show_model;
 		position_tracker.toggle_debug();
+	}
+	if (keys['C']) {
+		config.enable_correction = !config.enable_correction;
+		position_tracker.toggle_correction();
 	}
 
 	// reset camera
