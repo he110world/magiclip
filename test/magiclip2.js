@@ -499,6 +499,18 @@ IRDots.prototype.update_sensor = function(data) {
 	}
 };
 
+IRDots.prototype.update_dot = function(dot) {
+	var history = dot_history[dot.idx];
+	if (history.length > 0) {
+		var newest = history[history.length-1];
+		if (newest.guess) {
+			newest.world_pos.copy(dot.world_pos);
+			newest.screen_pos.copy(dot.screen_pos);
+			this.mesh.dots[dot.idx].position.copy(dot.world_pos);
+		}
+	}
+};
+
 IRDots.prototype.get_current = function() {
 	var dots = [];
 	for (var i=0; i<4; i++) {
@@ -984,18 +996,19 @@ PositionTracker.prototype.update = function() {
 		var missing_pos = center.clone();
 		missing_pos.multiplyScalar(2);
 		var missing_dot;
-		if (d3.guess) {	// 2-4
-			missing_pos.sub(result.world_pos2);
-			missing_dot = ir_dots[(min_i+3)%4];
-		} else {	// 1-3
+		if (d3.guess) {	// dot 3 missing: d3 = 2*center - d1
 			missing_pos.sub(result.world_pos1);
 			missing_dot = ir_dots[(min_i+2)%4];
+		} else {	// dot 4 missing: d4 = 2*center - d2
+			missing_pos.sub(result.world_pos2);
+			missing_dot = ir_dots[(min_i+3)%4];
 		}
-		missing_dot.world_pos = missing_pos;
-		missing_dot.screen_pos= world_to_screen(missing_pos);
+		missing_dot.screen_pos = world_to_screen(missing_pos);
+		missing_dot.world_pos = screen_to_world(missing_dot.screen_pos);
 
 		this.debug_crossbar.model.position.copy(center);
 		this.crossbar.model.position.copy(center);
+		this.ir_dots.update_dot(missing_dot);
 		controls.target.copy(center);
 
 	} else if (new_cnt === 4) {
