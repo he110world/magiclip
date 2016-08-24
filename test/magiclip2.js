@@ -979,7 +979,7 @@ PositionTracker.prototype.update = function() {
 
 		var ray1 = ir_rays[min_i].clone();
 		var ray2 = ir_rays[(min_i+1)%4].clone();
-		var diagonal_dot_dir, missing_3rd;
+		var diagonal_dot_dir;
 
 		//iter_max, min_dir, ray1, ray2, diagonal_dot_dir, missing_3rd
 		// TEST
@@ -1031,165 +1031,27 @@ PositionTracker.prototype.update = function() {
 		}
 		var ray1 = ir_rays[min_idx].clone();
 		var ray2 = ir_rays[(min_idx+1)%4].clone();
+		var ray3 = ir_rays[(min_idx+2)%4].clone();
 
-		var first_dist_sq, last_dist_sq;
-		var last_choice = 0;	//x
-		var last_err = 0;
-		var step_x = 0.01;
-		var step_y = 0.01;
-		var step_z = 0.01;
-		var debug_str = '';
+		var result = this.optimize(iter_max, min_dir, ray1, ray2, ray3, false);
+		var center = result.center;
 
-//		test_euler.set(0,0,0);
-		for (iter_cnt=0; iter_cnt<iter_max; iter_cnt++) {
-			// when pointing at camera, crossbar_dir can be parallel to the direction of camera
-			crossbar_dir.set(0,0,1);
-			crossbar_dir.applyEuler(test_euler);	// euler.z is useless: euler_z((0,0,1), any_angle) === (0,0,1)
-			crossbar_dir.applyQuaternion(qrel);
-
-			// crossbar plane x side plane
-			intersect_dir.crossVectors(crossbar_dir, min_dir);
-			intersect_dir.normalize();
-
-			// angle between crossbar plane & cast ray
-			var cos1 = intersect_dir.dot(ray1);
-			var cos2 = intersect_dir.dot(ray2);
-			var target_d = BAR_LENGTH * Math.sqrt(2) / 2;
-
-			var rad1 = Math.PI - Math.acos(cos1);
-			var rad2 = Math.acos(cos2);
-			var rad = Math.acos(ray1.dot(ray2));
-
-			var k = target_d / Math.sin(rad);
-			var d1 = k * Math.sin(rad1);
-			var d2 = k * Math.sin(rad2);
-
-			var world_pos1 = ray1.clone();
-			var world_pos2 = ray2.clone();
-			world_pos1.multiplyScalar(d2);
-			world_pos2.multiplyScalar(d1);
-			world_pos1.add(camera_saved.position);
-			world_pos2.add(camera_saved.position);
-			mid12.addVectors(world_pos1, world_pos2);
-			mid12.multiplyScalar(0.5);
-
-			point_at_center.crossVectors(intersect_dir, crossbar_dir);
-			point_at_center.normalize();
-			var center = point_at_center.clone();
-			center.multiplyScalar(-target_d / 2);
-			center.add(mid12);
-
-			// extrapolate the other two points
-//			var world_pos3 = center.clone();
-//			world_pos3.multiplyScalar(2);
-//			world_pos3.sub(world_pos1);
-
-//			var world_pos4 = center.clone();
-//			world_pos4.multiplyScalar(2);
-//			world_pos4.sub(world_pos2);
-
-			// project IR dots to the crossbar plane
-			ray3.origin = camera_saved.position.clone();
-			ray3.direction = ir_rays[(min_idx+2)%4].clone();
-//			ray4.origin = camera_saved.position.clone();
-//			ray4.direction = ir_rays[(min_idx+3)%4].clone();
-			crossbar_plane.normal = crossbar_dir.clone();
-			crossbar_plane.constant = -crossbar_dir.dot(center);
-			var world_pos3x = ray3.intersectPlane(crossbar_plane);
-//			var world_pos4x = ray4.intersectPlane(crossbar_plane);
-
-			if (world_pos3x) {
-				cast_center.addVectors(world_pos1, world_pos3x);
-				cast_center.multiplyScalar(0.5);
-
-				if (!config.enable_correction) break;
-
-				//correction
-				local_x = intersect_dir.clone();
-				local_y.crossVectors(crossbar_dir, intersect_dir);
-				local_z = crossbar_dir.clone();
-
-				dcenter.subVectors(cast_center, center);
-				var dist_sq = dcenter.lengthSq();
-				if (last_dist_sq === undefined) {
-					first_dist_sq = last_dist_sq = dist_sq;
-				}
-				var gx = dcenter.dot(local_x);
-				var gy = dcenter.dot(local_y);
-				var gz = dcenter.dot(local_z);
-
-				if (gx*gx + gy*gy + gz*gz< 1e-4) break;
-
-				var sx = last_sx;
-				var sy = last_sy;
-				var sz = last_sz;
-				var k = 1;
-				if (dist_sq > last_dist_sq) {
-					debug_str += '-';
-
-					// prevent error ping pong:
-					// +x -> err -> -x -> err -> +x ...
-					var err_ping_pong = last_err === last_choice;
-					if (last_choice === 0) {
-						sx = -sx;
-						test_euler.x -= 2 * sx * step_x;
-						if (err_ping_pong) gx = 0;
-					} else if (last_choice === 1) {
-						sy = -sy;
-						test_euler.y -= 2 * sy * step_y;
-						if (err_ping_pong) gy = 0;
-					} else {
-						sz = -sz;
-						test_euler.z -= 2 * sz * step_z;
-						if (err_ping_pong) gz = 0;
-					}
-					last_err = last_choice;
-				} else {
-					debug_str += '+';
-					k = Math.sqrt(dist_sq / last_dist_sq);
-				}
-
-				var ax = Math.abs(gx);
-				var ay = Math.abs(gy);
-				var az = Math.abs(gz);
-				var amax = Math.max(ax,ay,az);
-				if (amax === ax) {
-					test_euler.x -= sx * step_x;
-					step_x *= k;
-					last_choice = 0;
-				} else if (amax === ay) {
-					test_euler.y -= sy * step_y;
-					step_y *= k;
-					last_choice = 1;
-				} else {
-					test_euler.z -= sz * step_z;
-					step_z *= k;
-					last_choice = 2;				
-				}
-				last_sx = sx;
-				last_sy = sy;
-				last_sz = sz;
-				last_dist_sq = dist_sq;
-				debug_str += last_choice;
-			}
-		}
-
-		this.debug_dot(world_pos1, 0xff00ff);
-		this.debug_dot(world_pos2, 0xf0000f);
+//		this.debug_dot(result.world_pos1, 0xff00ff);
+//		this.debug_dot(result.world_pos2, 0xf0000f);
 //		this.debug_dot(world_pos3, 0xffffff);
 //		this.debug_dot(world_pos4, 0xf0f00f);
-		if (world_pos3x)
-			this.debug_dot(world_pos3x, 0x888888);
+//		if (world_pos3x)
+//			this.debug_dot(world_pos3x, 0x888888);
 //		if (world_pos4x)
 //			this.debug_dot(world_pos4x, 0x808008);
-		this.debug_dot(mid12, 0x00ffff);
+//		this.debug_dot(mid12, 0x00ffff);
 		this.debug_dot(center, 0xffff00);
-		this.debug_ray(center, crossbar_dir, 0xbadbad);
-		this.debug_ray(world_pos1, local_x, 0xdaddad);
-		this.debug_ray(world_pos1, local_y, 0xdad000);
+//		this.debug_ray(center, crossbar_dir, 0xbadbad);
+//		this.debug_ray(world_pos1, local_x, 0xdaddad);
+//		this.debug_ray(world_pos1, local_y, 0xdad000);
 
-		this.debug_dot(cast_center, 0x2277bb);
-		this.debug_line(center, cast_center, 0xffdd00);
+//		this.debug_dot(cast_center, 0x2277bb);
+//		this.debug_line(center, cast_center, 0xffdd00);
 
 		this.debug_crossbar.model.position.copy(center);
 		this.crossbar.model.position.copy(center);
