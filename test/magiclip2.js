@@ -368,7 +368,7 @@ function IRDots () {
 	for (var i=0; i<4; i++) {
 		var dot = new THREE.Mesh(this.geom, new THREE.MeshPhongMaterial({color:colors[i], transparent:true, opacity:0.5}));
 		scene.add(dot);
-		dot.visible = false;
+//		dot.visible = false;
 		this.mesh.dots[i] = dot;
 	}
 }
@@ -489,8 +489,10 @@ IRDots.prototype.update_sensor = function(data) {
 				var newest = history[history.length-1];
 				if (slots.indexOf(i) === -1) {
 					newest.guess = true;
+					this.mesh.dots[i].visible = false;
 				} else {
 					newest.idx = i;
+					this.mesh.dots[i].visible = true;
 					this.mesh.dots[i].position.copy(newest.world_pos);
 				}
 			} 
@@ -705,12 +707,22 @@ PositionTracker.prototype.optimize_diagnal = function(iter_max, ray1, ray2, diag
 	var rad1 = Math.PI - Math.acos(ray1.dot(diag_dir));
 	var rad2 = Math.acos(ray2.dot(diag_dir));
 
-	if (rad + rad1 + rad2 > Math.PI + 0.01) {
-		rad1 = Math.PI - rad1;
-		rad2 = Math.PI - rad2;
+	var rad3 = Math.PI - rad1;
+	var rad4 = Math.PI - rad2;
+
+	var sum1 = rad + rad1 + rad2;
+	var sum2 = rad + rad3 + rad4;
+
+	if (Math.abs(sum1 - Math.PI) > Math.abs(sum2 - Math.PI)) {
+		rad1 = rad3;
+		rad2 = rad4;
 	}
 
-	console.log(rad2deg(rad), rad2deg(rad1), rad2deg(rad2));
+//	console.log(rad2deg(rad), rad2deg(rad1), rad2deg(rad2));
+	var deg = rad2deg(rad2);
+	if (isNaN(deg)) {
+		console.log(ray2,diag_dir,rad2);
+	}
 
 	var k = BAR_LENGTH / Math.sin(rad);
 	var d1 = k * Math.sin(rad1);
@@ -907,6 +919,10 @@ function is_colinear (dots) {
 	return colinear > COLINEAR_THRESH || colinear < -COLINEAR_THRESH;
 }
 
+function find_edge () {
+
+}
+
 function find_diagonal (ir_dots, ir_rays, last_center) {
 	var ray1, ray2, dot1, dot2;
 	var max_d = -1e10;
@@ -938,12 +954,12 @@ function find_diagonal (ir_dots, ir_rays, last_center) {
 	var axis_x = new Vector3(1,0,0).applyEuler(test_euler).applyQuaternion(qrel);
 	var axis_y = new Vector3(0,1,0).applyEuler(test_euler).applyQuaternion(qrel);
 
+/*
 	// use last center
 	var proj_x = last_center.clone().add(axis_x);
 	var proj_y = last_center.clone().add(axis_y);
 	var proj_x_neg = last_center.clone().sub(axis_x);
 	var proj_y_neg = last_center.clone().sub(axis_y);
-
 
 	var last_center_2d = world_to_screen(last_center);
 	var proj_x_2d = world_to_screen(proj_x).sub(last_center_2d);
@@ -955,7 +971,15 @@ function find_diagonal (ir_dots, ir_rays, last_center) {
 	} else {
 		diag_dir = axis_y.clone();
 	}
+	*/
 //	var diag_2d = dot2.screen_pos.clone().sub(dot1.screen_pos).normalize();
+	var diag_dir;
+	var cam_dir = last_center.clone().sub(camera_saved.position).normalize(); //camera_saved.getWorldDirection();
+	if (Math.abs(cam_dir.dot(axis_x)) < Math.abs(cam_dir.dot(axis_y))) {
+		diag_dir = axis_x;
+	} else {
+		diag_dir = axis_y;
+	}
 
 	
 /*
@@ -971,10 +995,13 @@ function find_diagonal (ir_dots, ir_rays, last_center) {
 }
 
 PositionTracker.prototype.get_last_center = function() {
+	return this.crossbar.model.position.clone();
+	/*
 	var last_center = this.record.center 
 	? this.record.center.clone() 
 	: this.crossbar.model.position.clone();
 	return last_center;
+	*/
 };
 
 PositionTracker.prototype.update = function() {
@@ -1064,6 +1091,7 @@ PositionTracker.prototype.update = function() {
 		ir_rays[i] = ray.clone();
 	}
 
+	var result;
 	if (false && new_cnt === 2 && this.record && this.record.frame === this.frame_cnt) {
 		/*
 			edge or diagonal?
@@ -1081,20 +1109,32 @@ PositionTracker.prototype.update = function() {
 			center of the IR dots on screen
 		 */
 		// 3 dots are colinear
-
-		var result;
 		var min_i = -1;
 		if (is_colinear(ir_dots)) {
 			// find diagonal
-			var diag = find_diagonal(ir_dots, ir_rays, this.get_last_center());
+			var last_center = this.get_last_center();
+			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
 				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+//				var result2 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir2);
+//				console.log('center',result.center);
+//				console.log('center2',result2.center);
+//				var center_2d = world_to_screen(result.center);
+//				var center2_2d = world_to_screen(result2.center);
+//				var last_center_2d = world_to_screen(last_center);
+//				if (result.center.distanceToSquared(last_center) > result2.center.distanceToSquared(last_center)) {
+//					result = result2;
+//				}
+//				console.log('last_center',last_center);
+				console.log('colinear 3', diag.i, diag.j);
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
 			}
 
+			if (result.center.z > -10)
+				console.log('3 colinear',result.center);
+
 			// fix missing dots
-			var missing_pos = result.center.clone().multiplyScalar(2);
 			var missing_screen_pos = world_to_screen(result.center).multiplyScalar(4);
 			var missing_dot;
 			for (var i=0; i<4; i++) {
@@ -1110,8 +1150,8 @@ PositionTracker.prototype.update = function() {
 			this.ir_dots.update_dot(missing_dot);
 
 			console.log('colinear 3');
-			this.debug_dot(result.world_pos1, 0xdd0000, 5);
-			this.debug_dot(result.world_pos2, 0x00dd00, 5);
+//			this.debug_dot(result.world_pos1, 0xdd0000, 5);
+//			this.debug_dot(result.world_pos2, 0x00dd00, 5);
 		} else {
 			// find edge similar to a previous edge
 			var prev_dots = this.record.ir_dots;
@@ -1180,7 +1220,13 @@ PositionTracker.prototype.update = function() {
 				d4.world_pos = screen_to_world(d3.screen_pos);
 				this.ir_dots.update_dot(d4);
 			}
+
+			if (result.center.z > -10)
+				console.log('3 dots',result.center);
+
 		}
+		this.debug_dot(result.world_pos1, 0xdd0000, 5);
+		this.debug_dot(result.world_pos2, 0x00dd00, 5);
 
 		var center = result.center;
 		this.temp_debug_dot(center, 0x00ffff, 0.2);
@@ -1192,14 +1238,30 @@ PositionTracker.prototype.update = function() {
 		// 4 dots colinear?
 		if (is_colinear(ir_dots)) {
 			// find diagonal
-			var diag = find_diagonal(ir_dots, ir_rays, this.get_last_center());
+			var last_center = this.get_last_center();
+			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
 				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+//				var result2 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir2);
+//				console.log('center',result.center);
+//				console.log('center2',result2.center);
+//				var center_2d = world_to_screen(result.center);
+//				var center2_2d = world_to_screen(result2.center);
+//				var last_center_2d = world_to_screen(last_center);
+//				if (result.center.distanceToSquared(last_center) > result2.center.distanceToSquared(last_center)) {
+//					result = result2;
+//				}
+//				console.log('last_center',last_center);
+				console.log('colinear 4');
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
 			}
 
 			console.log('colinear 4');
+
+			if (result.center.z > -10)
+				console.log('4 colinear',result.center);
+
 		} else {
 			// side planes
 			var min_dot = 1e10;
@@ -1223,6 +1285,10 @@ PositionTracker.prototype.update = function() {
 			var ray3 = ir_rays[(min_i+2)%4].clone();
 
 			result = this.optimize(iter_max, min_dir, ray1, ray2, ray3, false);
+
+			if (result.center.z > -10)
+				console.log('4 dots',result.center);
+
 		}
 
 		var center = result.center;
@@ -1245,6 +1311,8 @@ PositionTracker.prototype.update = function() {
 	if (center) {
 		this.record.center = center.clone();
 	}
+
+	console.log(new_cnt);
 };
 
 PositionTracker.prototype.update_ir_sensor = function(data) {
