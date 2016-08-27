@@ -1093,6 +1093,7 @@ PositionTracker.prototype.update = function() {
 			center of the IR dots on screen
 		 */
 		// 3 dots are colinear
+		var dist1 = 0;
 		var min_i = -1;
 		if (is_colinear(ir_dots)) {
 			// find diagonal
@@ -1101,13 +1102,13 @@ PositionTracker.prototype.update = function() {
 			if (diag) {
 				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 
-				console.log('colinear 3', diag.i, diag.j);
+//				console.log('colinear 3', diag.i, diag.j);
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
 			}
 
-			if (result.center.z > -20)
-				console.log('3 colinear',result.center);
+//			if (result.center.z > -20)
+//				console.log('3 colinear',result.center);
 
 			// fix missing dots
 			this.fix_missing_dot3(ir_dots, result.center);
@@ -1125,7 +1126,7 @@ PositionTracker.prototype.update = function() {
 			missing_dot.world_pos = screen_to_world(missing_screen_pos);
 			this.ir_dots.update_dot(missing_dot);
 			*/
-			console.log('colinear 3');
+//			console.log('colinear 3');
 //			this.debug_dot(result.world_pos1, 0xdd0000, 5);
 //			this.debug_dot(result.world_pos2, 0x00dd00, 5);
 		} else {
@@ -1209,7 +1210,7 @@ PositionTracker.prototype.update = function() {
 			var best_test_euler = test_euler.clone();
 			result = this.optimize(iter_max, min_dir, ray1, ray2, ray3);//diagonal_dot_dir, d3.guess);
 			var center_screen_pos = world_to_screen(result.center);
-			var diag_center_screen_pos = [];	// 3 possible center pos
+			var diag_center_screen_pos;
 			var real_dots = [];
 			for (var i=0; i<4; i++) {
 				var dot = ir_dots[i];
@@ -1217,18 +1218,44 @@ PositionTracker.prototype.update = function() {
 					real_dots.push(dot);
 				}
 			}
+
+			// assume the furthest dots are on the diagonal
+			var diag_d = 0;
 			for (i=0; i<2; i++) {
 				for (var j=i+1; j<3; j++) {
-					diag_center_screen_pos.push(real_dots[i].screen_pos.clone().add(real_dots[j].screen_pos).multiplyScalar(0.5));
+					var s1 = real_dots[i].screen_pos;
+					var s2 = real_dots[j].screen_pos;
+					var sd = s1.distanceToSquared(s2);
+					if (sd > diag_d) {
+						diag_d = sd;
+						diag_center_screen_pos = real_dots[i].screen_pos.clone().add(real_dots[j].screen_pos).multiplyScalar(0.5);
+					}
 				}
 			}
 
-			var dist1 = Math.min(center_screen_pos.distanceTo(diag_center_screen_pos[0]),
-				center_screen_pos.distanceTo(diag_center_screen_pos[1]),
-				center_screen_pos.distanceTo(diag_center_screen_pos[2]));
+			dist1 = center_screen_pos.distanceTo(diag_center_screen_pos);
+//			var best_param;
 
+/*			if (dist1 > 10) {
+				test_euler.set(0,0,0);
+				var result2 = this.optimize(iter_max, min_dir, ray1, ray2, ray4);
+				var center2_screen_pos = world_to_screen(result2.center);
+
+				var dist2 = Math.min(center2_screen_pos.distanceTo(diag_center_screen_pos[0]),
+					center2_screen_pos.distanceTo(diag_center_screen_pos[1]),
+					center2_screen_pos.distanceTo(diag_center_screen_pos[2]));
+
+				if (dist2 < dist1) {
+					result = result2;
+					dist1 = dist2;
+					best_test_euler = test_euler.clone();
+					//best_param = [iter_max, min_dir2.clone(), r1.clone(), r2.clone(), r3.clone()];
+				}
+			}
+*/
 			// try every combination
 			if (dist1 > 10) {
+//				console.log('bad 3');
 				for (var i=0; i<4; i++) {
 					for (var j=0; j<4; j++) {
 						if (i==j || (i==min_i && j==min_i+2)) continue;
@@ -1246,17 +1273,18 @@ PositionTracker.prototype.update = function() {
 							for (k=0; k<2; k++) {
 								test_euler.set(0,0,0);// = old_test_euler.clone();
 								var min_dir2 = ir_rays[i].clone().cross(ir_rays[j]);
-								var result2 = this.optimize(iter_max, min_dir2, ir_rays[i], ir_rays[j], ir_rays[other_dots[k]]);
+								var r1 = ir_rays[i];
+								var r2 = ir_rays[j];
+								var r3 = ir_rays[other_dots[k]];
+								var result2 = this.optimize(iter_max, min_dir2, r1, r2, r3);
 								var center2_screen_pos = world_to_screen(result2.center);
-
-								var dist2 = Math.min(center2_screen_pos.distanceTo(diag_center_screen_pos[0]),
-									center2_screen_pos.distanceTo(diag_center_screen_pos[1]),
-									center2_screen_pos.distanceTo(diag_center_screen_pos[2]));
+								var dist2 = center2_screen_pos.distanceTo(diag_center_screen_pos);
 
 								if (dist2 < dist1) {
 									result = result2;
 									dist1 = dist2;
 									best_test_euler = test_euler.clone();
+//									best_param = [iter_max, min_dir2.clone(), r1.clone(), r2.clone(), r3.clone()];
 								}
 							}
 						}
@@ -1272,27 +1300,31 @@ PositionTracker.prototype.update = function() {
 					// try colinear
 					var result3 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 					var center3_screen_pos = world_to_screen(result3.center);
-
-					var dist2 = Math.min(center_screen_pos.distanceTo(diag_center_screen_pos[0]),
-						center3_screen_pos.distanceTo(diag_center_screen_pos[1]),
-						center3_screen_pos.distanceTo(diag_center_screen_pos[2]));
-
-						if (dist3 < dist1) {
+					var dist3 = center3_screen_pos.distanceTo(diag_center_screen_pos);
+					if (dist3 < dist1) {
 						result = result3;
 						dist1 = dist3;
 						best_test_euler = test_euler.clone();
+//					} else if (best_param) {
+//						test_euler.copy(best_test_euler);
+//						this.optimize.apply(this, best_param);
 					}
 				}
 
 				if (dist1 > 10) {
 					console.log('fucking shit 3!', dist1, result.center.z);
 				}
+//			} else if (best_param) {
+//				test_euler.copy(best_test_euler);
+//				this.optimize.apply(this, best_param);
 			}
 
 			test_euler.copy(best_test_euler);
 
 			// fix missing dot
-			this.fix_missing_dot3(ir_dots, result.center);
+			if (dist1 < 10) {
+				this.fix_missing_dot3(ir_dots, result.center);
+			}
 /*			var missing_pos = result.center.clone().multiplyScalar(2);
 			if (d3.guess) {// dot 3 missing: d3 = 2*center - d1
 				missing_pos.sub(result.world_pos1);
@@ -1306,8 +1338,8 @@ PositionTracker.prototype.update = function() {
 				this.ir_dots.update_dot(d4);
 			}
 */
-			if (result.center.z > -20)
-				console.log('3 dots',result.rad,result.center, dist1, dist2);
+//			if (result.center.z > -20)
+//				console.log('3 dots',result.rad,result.center, dist1, dist2);
 
 		}
 		this.debug_dot(result.world_pos1, 0xdd0000, 5);
@@ -1318,8 +1350,8 @@ PositionTracker.prototype.update = function() {
 		this.debug_crossbar.model.position.copy(center);
 		this.crossbar.model.position.copy(center);
 		controls.target.copy(center);
-
 	} else if (new_cnt === 4) {
+		var dist1 = 0;
 		// 4 dots colinear?
 		if (is_colinear(ir_dots)) {
 			// find diagonal
@@ -1327,15 +1359,13 @@ PositionTracker.prototype.update = function() {
 			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
 				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
-				console.log('colinear 4');
+//				console.log('colinear 4');
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
 			}
 
-			console.log('colinear 4');
-
-			if (result.center.z > -20)
-				console.log('4 colinear',result.center);
+//			if (result.center.z > -20)
+//				console.log('4 colinear',result.center);
 
 		} else {
 			// side planes
@@ -1371,10 +1401,12 @@ PositionTracker.prototype.update = function() {
 			result = this.optimize(iter_max, min_dir, ray1, ray2, ray3);//diagonal_dot_dir, d3.guess);
 			var diag_center_screen_pos = d1.screen_pos.clone().add(d2.screen_pos).add(d3.screen_pos).add(d4.screen_pos).multiplyScalar(0.25); 
 			var center_screen_pos = world_to_screen(result.center);
-			var dist1 = center_screen_pos.distanceTo(diag_center_screen_pos);
+			dist1 = center_screen_pos.distanceTo(diag_center_screen_pos);
+//			var best_param;
 
 			// try every combination
 			if (dist1 > 10) {
+//				console.log('bad 4');
 				for (var i=0; i<4; i++) {
 					for (var j=0; j<4; j++) {
 						if (i==j || (i==min_i && j==min_i+2)) continue;
@@ -1392,7 +1424,10 @@ PositionTracker.prototype.update = function() {
 							for (k=0; k<2; k++) {
 								test_euler.set(0,0,0);// = old_test_euler.clone();
 								var min_dir2 = ir_rays[i].clone().cross(ir_rays[j]);
-								var result2 = this.optimize(iter_max, min_dir2, ir_rays[i], ir_rays[j], ir_rays[other_dots[k]]);
+								var r1 = ir_rays[i];
+								var r2 = ir_rays[j];
+								var r3 =  ir_rays[other_dots[k]];
+								var result2 = this.optimize(1, min_dir2, r1, r2, r3);
 								var center2_screen_pos = world_to_screen(result2.center);
 
 								var dist2 = center2_screen_pos.distanceTo(diag_center_screen_pos);
@@ -1400,6 +1435,7 @@ PositionTracker.prototype.update = function() {
 									result = result2;
 									dist1 = dist2;
 									best_test_euler = test_euler.clone();
+//									best_param = [iter_max, min_dir2.clone(), r1.clone(), r2.clone(), r3.clone()];
 								}
 							}
 //						}
@@ -1420,12 +1456,18 @@ PositionTracker.prototype.update = function() {
 						result = result3;
 						dist1 = dist3;
 						best_test_euler = test_euler.clone();
+//					} else if (best_param) {
+//						test_euler.copy(best_test_euler);
+//						result = this.optimize.apply(this, best_param);
 					}
 				}
 
 				if (dist1 > 10) {
 					console.log('fucking shit 4!', dist1, result.center.z);
 				}
+//			} else if (best_param) {
+//				test_euler.copy(best_test_euler);
+//				result = this.optimize.apply(this, best_param);
 			}
 
 			test_euler.copy(best_test_euler);
@@ -1433,8 +1475,8 @@ PositionTracker.prototype.update = function() {
 //			var result2 = this.optimize(iter_max, min_dir2, ray3, ray4, ray1, false);
 //			result.center.add(result2.center).multiplyScalar(0.5);
 
-			if (result.center.z > -20)
-				console.log('4 dots',result.rad,result.center);
+//			if (result.center.z > -20)
+//				console.log('4 dots',result.rad,result.center);
 
 		}
 
@@ -1446,7 +1488,6 @@ PositionTracker.prototype.update = function() {
 		this.debug_crossbar.model.position.copy(center);
 		this.crossbar.model.position.copy(center);
 		controls.target.copy(center);
-
 	}
 
 	this.crossbar.update_rotation(qrel);
@@ -1459,7 +1500,7 @@ PositionTracker.prototype.update = function() {
 		this.record.center = center.clone();
 	}
 
-	console.log(new_cnt);
+//	console.log(new_cnt);
 };
 
 PositionTracker.prototype.update_ir_sensor = function(data) {
