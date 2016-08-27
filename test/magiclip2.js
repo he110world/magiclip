@@ -84,7 +84,7 @@ SerialPort.list(function(err,ports){
 // config
 var config = {
 	show_model : false,
-	enable_correction : true
+	enable_correction : true 
 };
 // renderer
 var renderer = new THREE.WebGLRenderer({
@@ -534,7 +534,7 @@ IRDots.prototype.get_current = function() {
 function DebugDot (color, r) {
 	r = r || 0.1;
 	this.geom = new THREE.SphereGeometry(r, 16, 16);
-	this.mat = new THREE.MeshPhongMaterial({color:color});
+	this.mat = new THREE.MeshPhongMaterial({color:color, transparent:true, opacity:0.5});
 	this.mesh = new THREE.Mesh(this.geom, this.mat);
 	scene.add(this.mesh);
 }
@@ -625,21 +625,24 @@ function PositionTracker () {
 	this.ir_dots = new IRDots();
 	this.debug_dots = {};
 	this.debug_lines = {};
-	this.debug_box = new DebugBox();
+//	this.debug_box = new DebugBox();
 	this.frame_cnt = 0;
 }
 
 PositionTracker.prototype.toggle_debug = function() {
 	this.crossbar.model.visible = config.show_model;
-	this.debug_box.mesh.visible = config.show_model;
+//	this.debug_box.mesh.visible = config.show_model;
 };
 
 PositionTracker.prototype.toggle_correction = function() {
+	config.enable_correction = !config.enable_correction;
+/*	
 	if (config.enable_correction) {
 		MAX_ITER_CNT = 100;
 	} else {
 		MAX_ITER_CNT = 1;
 	}
+*/
 };
 
 PositionTracker.prototype.translate = function(x,y,z) {
@@ -700,7 +703,7 @@ var last_sx = 1;
 var last_sy = 1;
 var last_sz = 1;
 var MAX_ITER_CNT = 100;
-var COLINEAR_THRESH = 0.995;
+var COLINEAR_THRESH = 0.99;
 
 PositionTracker.prototype.optimize_diagnal = function(iter_max, ray1, ray2, diag_dir) {
 	var rad = Math.acos(ray1.dot(ray2));
@@ -778,10 +781,21 @@ PositionTracker.prototype.optimize = function(iter_max, min_dir, ray1, ray2, dia
 		var cos2 = intersect_dir.dot(ray2);
 		var target_d = BAR_LENGTH / Math.sqrt(2);
 
+		var rad = Math.acos(ray1.dot(ray2));
 		var rad1 = Math.PI - Math.acos(cos1);
 		var rad2 = Math.acos(cos2);
-		var rad = Math.acos(ray1.dot(ray2));
 
+/*
+		var rad3 = Math.PI - rad1;
+		var rad4 = Math.PI - rad2;
+
+		var sum1 = rad + rad1 + rad2;
+		var sum2 = rad + rad2 + rad3;
+		if (Math.abs(sum1 - Math.PI) > Math.abs(sum2 - Math.PI)) {
+			rad1 = rad3;
+			rad2 = rad4;
+		}
+*/
 		var k = target_d / Math.sin(rad);
 		var d1 = k * Math.sin(rad1);
 		var d2 = k * Math.sin(rad2);
@@ -801,6 +815,7 @@ PositionTracker.prototype.optimize = function(iter_max, min_dir, ray1, ray2, dia
 		center.multiplyScalar(-target_d / 2);
 		center.add(mid12);
 
+		if (!config.enable_correction) break;
 		// extrapolate the other two points
 //			var world_pos3 = center.clone();
 //			world_pos3.multiplyScalar(2);
@@ -820,8 +835,6 @@ PositionTracker.prototype.optimize = function(iter_max, min_dir, ray1, ray2, dia
 			var world_pos = missing_3rd ? world_pos2 : world_pos1;
 			cast_center.addVectors(world_pos, world_cast_pos);
 			cast_center.multiplyScalar(0.5);
-
-			if (!config.enable_correction) break;
 
 			//correction
 			local_x = intersect_dir.clone();
@@ -897,6 +910,7 @@ PositionTracker.prototype.optimize = function(iter_max, min_dir, ray1, ray2, dia
 	result.center = center;
 	result.world_pos1 = world_pos1;
 	result.world_pos2 = world_pos2;
+	result.rad = rad + rad1 + rad2;
 
 	return result;
 };
@@ -954,25 +968,6 @@ function find_diagonal (ir_dots, ir_rays, last_center) {
 	var axis_x = new Vector3(1,0,0).applyEuler(test_euler).applyQuaternion(qrel);
 	var axis_y = new Vector3(0,1,0).applyEuler(test_euler).applyQuaternion(qrel);
 
-/*
-	// use last center
-	var proj_x = last_center.clone().add(axis_x);
-	var proj_y = last_center.clone().add(axis_y);
-	var proj_x_neg = last_center.clone().sub(axis_x);
-	var proj_y_neg = last_center.clone().sub(axis_y);
-
-	var last_center_2d = world_to_screen(last_center);
-	var proj_x_2d = world_to_screen(proj_x).sub(last_center_2d);
-	var proj_y_2d = world_to_screen(proj_y).sub(last_center_2d);
-	var proj_x_neg_2d = world_to_screen(proj_x_neg).sub(last_center_2d);
-	var proj_y_neg_2d = world_to_screen(proj_y_neg).sub(last_center_2d);
-	if (proj_x_2d.distanceToSquared(proj_x_neg_2d) > proj_y_2d.distanceToSquared(proj_y_neg_2d)) {
-		diag_dir = axis_x.clone();
-	} else {
-		diag_dir = axis_y.clone();
-	}
-	*/
-//	var diag_2d = dot2.screen_pos.clone().sub(dot1.screen_pos).normalize();
 	var diag_dir;
 	var cam_dir = last_center.clone().sub(camera_saved.position).normalize(); //camera_saved.getWorldDirection();
 	if (Math.abs(cam_dir.dot(axis_x)) < Math.abs(cam_dir.dot(axis_y))) {
@@ -980,17 +975,6 @@ function find_diagonal (ir_dots, ir_rays, last_center) {
 	} else {
 		diag_dir = axis_y;
 	}
-
-	
-/*
-	var dpx = Math.abs(diag_2d.dot(proj_x_2d));
-	var dpy = Math.abs(diag_2d.dot(proj_y_2d));
-	if (dpx > dpy) {
-		diag_dir = axis_x.clone();
-	} else {
-		diag_dir = axis_y.clone();
-	}
-*/
 	return {i:max_i, j:max_j, dir:diag_dir};
 }
 
@@ -1002,6 +986,22 @@ PositionTracker.prototype.get_last_center = function() {
 	: this.crossbar.model.position.clone();
 	return last_center;
 	*/
+};
+
+PositionTracker.prototype.fix_missing_dot3 = function(ir_dots, center) {
+	var missing_screen_pos = world_to_screen(center).multiplyScalar(4);
+	var missing_dot;
+	for (var i=0; i<4; i++) {
+		var dot = ir_dots[i];
+		if (dot.guess) {
+			missing_dot = dot;
+		} else {
+			missing_screen_pos.sub(dot.screen_pos);
+		}
+	}
+	missing_dot.screen_pos = missing_screen_pos;
+	missing_dot.world_pos = screen_to_world(missing_screen_pos);
+	this.ir_dots.update_dot(missing_dot);
 };
 
 PositionTracker.prototype.update = function() {
@@ -1051,22 +1051,6 @@ PositionTracker.prototype.update = function() {
 	    return d2 - d1;
 	});
 
-
-/*
-	var iter_cnt;
-	var crossbar_dir = new Vector3(0,0,1);
-	var intersect_dir = new Vector3;
-	var mid12 = new Vector3;
-	var point_at_center = new Vector3;
-	var cast_center = new Vector3;
-	var ray3 = new THREE.Ray;
-	var ray4 = new THREE.Ray;
-	var crossbar_plane = new THREE.Plane;
-	var dcenter = new Vector3;
-	var local_x = new Vector3;
-	var local_y = new Vector3;
-	var local_z = new Vector3;
-*/
 	// if top view, disable correction
 	var crossbar_dir = new Vector3(0,0,1);
 	crossbar_dir.applyQuaternion(qrel);
@@ -1096,7 +1080,7 @@ PositionTracker.prototype.update = function() {
 		/*
 			edge or diagonal?
 		*/
-	} else if (new_cnt === 3 && this.record && this.record.frame === this.frame_cnt) {
+	} else if (ir_dots.length===4 && new_cnt === 3 && this.record && this.record.frame === this.frame_cnt) {
 		/* 
 			3 edges, multiple possibilities
 			3 edges / 2 edges + 1 diagonal / 1 edge + 1 merged vert
@@ -1116,26 +1100,18 @@ PositionTracker.prototype.update = function() {
 			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
 				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
-//				var result2 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir2);
-//				console.log('center',result.center);
-//				console.log('center2',result2.center);
-//				var center_2d = world_to_screen(result.center);
-//				var center2_2d = world_to_screen(result2.center);
-//				var last_center_2d = world_to_screen(last_center);
-//				if (result.center.distanceToSquared(last_center) > result2.center.distanceToSquared(last_center)) {
-//					result = result2;
-//				}
-//				console.log('last_center',last_center);
+
 				console.log('colinear 3', diag.i, diag.j);
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
 			}
 
-			if (result.center.z > -10)
+			if (result.center.z > -20)
 				console.log('3 colinear',result.center);
 
 			// fix missing dots
-			var missing_screen_pos = world_to_screen(result.center).multiplyScalar(4);
+			this.fix_missing_dot3(ir_dots, result.center);
+/*			var missing_screen_pos = world_to_screen(result.center).multiplyScalar(4);
 			var missing_dot;
 			for (var i=0; i<4; i++) {
 				var dot = ir_dots[i];
@@ -1148,12 +1124,13 @@ PositionTracker.prototype.update = function() {
 			missing_dot.screen_pos = missing_screen_pos;
 			missing_dot.world_pos = screen_to_world(missing_screen_pos);
 			this.ir_dots.update_dot(missing_dot);
-
+			*/
 			console.log('colinear 3');
 //			this.debug_dot(result.world_pos1, 0xdd0000, 5);
 //			this.debug_dot(result.world_pos2, 0x00dd00, 5);
 		} else {
 			// find edge similar to a previous edge
+			/*
 			var prev_dots = this.record.ir_dots;
 			var idx_prev_dots = [];
 			for (var i=0; i<4; i++) {
@@ -1180,8 +1157,26 @@ PositionTracker.prototype.update = function() {
 			 	if (err < min_err) {
 			 		min_err = err;
 			 		min_i = i;
-			 		min_dir.crossVectors(ir_rays[i], ir_rays[(i+1)%4]);
+			 		min_dir.crossVectors(ir_rays[i], ir_rays[(i+1)%4]).normalize();
 			 	}
+			}
+			*/
+			// find the longest edge
+			var max_d = -1e10;
+			var min_dir = new Vector3;
+			for (var i=0; i<4; i++) {
+				var j = (i+1)%4;
+				var d1 = ir_dots[i];
+				var d2 = ir_dots[j];
+
+				if (d1.guess || d2.guess) continue;
+
+				var d = d1.screen_pos.distanceToSquared(d2.screen_pos);
+				if (d > max_d) {
+					max_d = d;
+					min_i = i;
+					min_dir.crossVectors(ir_rays[i], ir_rays[j]);
+				}
 			}
 
 			if (min_i < 0) {
@@ -1191,24 +1186,114 @@ PositionTracker.prototype.update = function() {
 			// find cast center
 			// we have the 3rd dot, which can be: 1) a real dot, or 2) a merged dot
 			// 1) a real dot
+			d1 = ir_dots[min_i];
+			d2 = ir_dots[(min_i+1)%4];
 			var d3 = ir_dots[(min_i+2)%4];
 			var d4 = ir_dots[(min_i+3)%4];
 
 			var ray1 = ir_rays[min_i].clone();
 			var ray2 = ir_rays[(min_i+1)%4].clone();
+			var ray3 = ir_rays[(min_i+2)%4].clone();
+			var ray4 = ir_rays[(min_i+3)%4].clone();
 			var diagonal_dot_dir;
 
 			//iter_max, min_dir, ray1, ray2, diagonal_dot_dir, missing_3rd
+			/*
 			if (d3.guess) {	// diagonal is d2-d4
 				diagonal_dot_dir = ir_rays[(min_i+3)%4].clone();
 			} else {	// diagonal is d1-d3
 				diagonal_dot_dir = ir_rays[(min_i+2)%4].clone();
 			}
+			*/
 
-			result = this.optimize(iter_max, min_dir, ray1, ray2, diagonal_dot_dir, d3.guess);
+			var best_test_euler = test_euler.clone();
+			result = this.optimize(iter_max, min_dir, ray1, ray2, ray3);//diagonal_dot_dir, d3.guess);
+			var center_screen_pos = world_to_screen(result.center);
+			var diag_center_screen_pos = [];	// 3 possible center pos
+			var real_dots = [];
+			for (var i=0; i<4; i++) {
+				var dot = ir_dots[i];
+				if (!dot.guess) {
+					real_dots.push(dot);
+				}
+			}
+			for (i=0; i<2; i++) {
+				for (var j=i+1; j<3; j++) {
+					diag_center_screen_pos.push(real_dots[i].screen_pos.clone().add(real_dots[j].screen_pos).multiplyScalar(0.5));
+				}
+			}
+
+			var dist1 = Math.min(center_screen_pos.distanceTo(diag_center_screen_pos[0]),
+				center_screen_pos.distanceTo(diag_center_screen_pos[1]),
+				center_screen_pos.distanceTo(diag_center_screen_pos[2]));
+
+			// try every combination
+			if (dist1 > 10) {
+				for (var i=0; i<4; i++) {
+					for (var j=0; j<4; j++) {
+						if (i==j || (i==min_i && j==min_i+2)) continue;
+
+						var dot1 = ir_dots[i];
+						var dot2 = ir_dots[j];
+						var other_dots = [];
+						for (var k=0; k<4; k++) {
+							if (k!=i && k!=j) {
+								other_dots.push(k);
+							}
+						}
+
+						if (!dot1.guess && !dot2.guess) {
+							for (k=0; k<2; k++) {
+								test_euler.set(0,0,0);// = old_test_euler.clone();
+								var min_dir2 = ir_rays[i].clone().cross(ir_rays[j]);
+								var result2 = this.optimize(iter_max, min_dir2, ir_rays[i], ir_rays[j], ir_rays[other_dots[k]]);
+								var center2_screen_pos = world_to_screen(result2.center);
+
+								var dist2 = Math.min(center2_screen_pos.distanceTo(diag_center_screen_pos[0]),
+									center2_screen_pos.distanceTo(diag_center_screen_pos[1]),
+									center2_screen_pos.distanceTo(diag_center_screen_pos[2]));
+
+								if (dist2 < dist1) {
+									result = result2;
+									dist1 = dist2;
+									best_test_euler = test_euler.clone();
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if (dist1 > 10) {
+				test_euler.set(0,0,0);
+				var last_center = this.get_last_center();
+				var diag = find_diagonal(ir_dots, ir_rays, last_center);
+				if (diag) {
+					// try colinear
+					var result3 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+					var center3_screen_pos = world_to_screen(result3.center);
+
+					var dist2 = Math.min(center_screen_pos.distanceTo(diag_center_screen_pos[0]),
+						center3_screen_pos.distanceTo(diag_center_screen_pos[1]),
+						center3_screen_pos.distanceTo(diag_center_screen_pos[2]));
+
+						if (dist3 < dist1) {
+						result = result3;
+						dist1 = dist3;
+						best_test_euler = test_euler.clone();
+					}
+				}
+
+				if (dist1 > 10) {
+					console.log('fucking shit 3!', dist1, result.center.z);
+				}
+			}
+
+			test_euler.copy(best_test_euler);
 
 			// fix missing dot
-			var missing_pos = result.center.clone().multiplyScalar(2);
+			this.fix_missing_dot3(ir_dots, result.center);
+/*			var missing_pos = result.center.clone().multiplyScalar(2);
 			if (d3.guess) {// dot 3 missing: d3 = 2*center - d1
 				missing_pos.sub(result.world_pos1);
 				d3.screen_pos = world_to_screen(missing_pos);
@@ -1220,9 +1305,9 @@ PositionTracker.prototype.update = function() {
 				d4.world_pos = screen_to_world(d3.screen_pos);
 				this.ir_dots.update_dot(d4);
 			}
-
-			if (result.center.z > -10)
-				console.log('3 dots',result.center);
+*/
+			if (result.center.z > -20)
+				console.log('3 dots',result.rad,result.center, dist1, dist2);
 
 		}
 		this.debug_dot(result.world_pos1, 0xdd0000, 5);
@@ -1242,16 +1327,6 @@ PositionTracker.prototype.update = function() {
 			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
 				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
-//				var result2 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir2);
-//				console.log('center',result.center);
-//				console.log('center2',result2.center);
-//				var center_2d = world_to_screen(result.center);
-//				var center2_2d = world_to_screen(result2.center);
-//				var last_center_2d = world_to_screen(last_center);
-//				if (result.center.distanceToSquared(last_center) > result2.center.distanceToSquared(last_center)) {
-//					result = result2;
-//				}
-//				console.log('last_center',last_center);
 				console.log('colinear 4');
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
@@ -1259,7 +1334,7 @@ PositionTracker.prototype.update = function() {
 
 			console.log('colinear 4');
 
-			if (result.center.z > -10)
+			if (result.center.z > -20)
 				console.log('4 colinear',result.center);
 
 		} else {
@@ -1280,14 +1355,86 @@ PositionTracker.prototype.update = function() {
 					min_dir	= dir.clone();
 				}
 			}
+
+
+			var d1 = ir_dots[min_i];
+			var d2 = ir_dots[(min_i+1)%4];
+			var d3 = ir_dots[(min_i+2)%4];
+			var d4 = ir_dots[(min_i+3)%4];
+
 			var ray1 = ir_rays[min_i].clone();
 			var ray2 = ir_rays[(min_i+1)%4].clone();
 			var ray3 = ir_rays[(min_i+2)%4].clone();
+			var ray4 = ir_rays[(min_i+3)%4].clone();
 
-			result = this.optimize(iter_max, min_dir, ray1, ray2, ray3, false);
+			var best_test_euler = test_euler.clone();
+			result = this.optimize(iter_max, min_dir, ray1, ray2, ray3);//diagonal_dot_dir, d3.guess);
+			var diag_center_screen_pos = d1.screen_pos.clone().add(d2.screen_pos).add(d3.screen_pos).add(d4.screen_pos).multiplyScalar(0.25); 
+			var center_screen_pos = world_to_screen(result.center);
+			var dist1 = center_screen_pos.distanceTo(diag_center_screen_pos);
 
-			if (result.center.z > -10)
-				console.log('4 dots',result.center);
+			// try every combination
+			if (dist1 > 10) {
+				for (var i=0; i<4; i++) {
+					for (var j=0; j<4; j++) {
+						if (i==j || (i==min_i && j==min_i+2)) continue;
+
+						var dot1 = ir_dots[i];
+						var dot2 = ir_dots[j];
+						var other_dots = [];
+						for (var k=0; k<4; k++) {
+							if (k!=i && k!=j) {
+								other_dots.push(k);
+							}
+						}
+
+//						if (!dot1.guess && !dot2.guess) {
+							for (k=0; k<2; k++) {
+								test_euler.set(0,0,0);// = old_test_euler.clone();
+								var min_dir2 = ir_rays[i].clone().cross(ir_rays[j]);
+								var result2 = this.optimize(iter_max, min_dir2, ir_rays[i], ir_rays[j], ir_rays[other_dots[k]]);
+								var center2_screen_pos = world_to_screen(result2.center);
+
+								var dist2 = center2_screen_pos.distanceTo(diag_center_screen_pos);
+								if (dist2 < dist1) {
+									result = result2;
+									dist1 = dist2;
+									best_test_euler = test_euler.clone();
+								}
+							}
+//						}
+					}
+				}
+			}
+
+			if (dist1 > 10) {
+				test_euler.set(0,0,0);
+				var last_center = this.get_last_center();
+				var diag = find_diagonal(ir_dots, ir_rays, last_center);
+				if (diag) {
+					// try colinear
+					var result3 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+					var center3_screen_pos = world_to_screen(result3.center);
+					var dist3 = center3_screen_pos.distanceTo(diag_center_screen_pos);
+					if (dist3 < dist1) {
+						result = result3;
+						dist1 = dist3;
+						best_test_euler = test_euler.clone();
+					}
+				}
+
+				if (dist1 > 10) {
+					console.log('fucking shit 4!', dist1, result.center.z);
+				}
+			}
+
+			test_euler.copy(best_test_euler);
+//			var min_dir2 = ray3.clone().cross(ray4).normalize();
+//			var result2 = this.optimize(iter_max, min_dir2, ray3, ray4, ray1, false);
+//			result.center.add(result2.center).multiplyScalar(0.5);
+
+			if (result.center.z > -20)
+				console.log('4 dots',result.rad,result.center);
 
 		}
 
@@ -1461,7 +1608,6 @@ var render = function () {
 		position_tracker.toggle_debug();
 	}
 	if (keys['C']) {
-		config.enable_correction = !config.enable_correction;
 		position_tracker.toggle_correction();
 	}
 
