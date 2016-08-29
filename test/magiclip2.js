@@ -541,6 +541,7 @@ function DebugDot (color, r) {
 
 DebugDot.prototype.set_pos = function(pos) {
 	this.mesh.position.copy(pos);
+	this.mesh.visible = true;
 };
 
 DebugDot.prototype.set_scale = function(s) {
@@ -551,6 +552,11 @@ DebugDot.prototype.set_color = function(color) {
 	this.mat.color.setHex(color);
 };
 
+DebugDot.prototype.set_visible = function(v) {
+	this.mesh.visible = v;
+};
+
+//////////////////////////////////
 function DebugLine (color) {
 	this.geom = new THREE.BufferGeometry();
 	var verts = new Float32Array(2*3);
@@ -559,6 +565,10 @@ function DebugLine (color) {
 	this.mesh = new THREE.Line(this.geom, mat);
 	scene.add(this.mesh);
 }
+
+DebugLine.prototype.set_visible = function(v) {
+	this.mesh.visible = v;
+};
 
 DebugLine.prototype.set_pos = function(p1, p2) {
 	var p = this.mesh.geometry.attributes.position;
@@ -570,6 +580,7 @@ DebugLine.prototype.set_pos = function(p1, p2) {
 	pos[4] = p2.y;
 	pos[5] = p2.z;
 	p.needsUpdate = true;
+	this.mesh.visible = true;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -629,6 +640,16 @@ function PositionTracker () {
 	this.frame_cnt = 0;
 }
 
+PositionTracker.prototype.clear_debug = function() {
+	for (var i in this.debug_dots) {
+		this.debug_dots[i].set_visible(false);
+	}
+
+	for (var i in this.debug_lines) {
+		this.debug_lines[i].set_visible(false);
+	}
+};
+
 PositionTracker.prototype.toggle_debug = function() {
 	this.crossbar.model.visible = config.show_model;
 //	this.debug_box.mesh.visible = config.show_model;
@@ -649,6 +670,7 @@ PositionTracker.prototype.translate = function(x,y,z) {
 	this.crossbar.model.position.add(new Vector3(x,y,z));
 };
 
+/*
 PositionTracker.prototype.temp_debug_dot = function(pos, color, r) {
 	color = color || 0xffffff;
 	var d = this.temp_dot;
@@ -659,6 +681,7 @@ PositionTracker.prototype.temp_debug_dot = function(pos, color, r) {
 	d.set_pos(pos);
 	d.set_scale(r);
 };
+*/
 
 PositionTracker.prototype.debug_dot = function(pos, color, r) {
 	color = color || 0xffffff;
@@ -917,13 +940,10 @@ PositionTracker.prototype.optimize = function(iter_max, min_dir, ray1, ray2, dia
 
 function is_colinear (dots) {
 	var real_dots = [];
-	var missing_i;
 	for (var i=0; i<4; i++) {
 		var dot = dots[i];
 		if (!dot.guess) {
 			real_dots.push(dot);
-		} else {
-			missing_i = i;
 		}
 	}
 
@@ -931,10 +951,6 @@ function is_colinear (dots) {
 	var edge2 = real_dots[2].screen_pos.clone().sub(real_dots[1].screen_pos).normalize();
 	var colinear = edge1.dot(edge2);
 	return colinear > COLINEAR_THRESH || colinear < -COLINEAR_THRESH;
-}
-
-function find_edge () {
-
 }
 
 function find_diagonal (ir_dots, ir_rays, last_center) {
@@ -986,6 +1002,9 @@ PositionTracker.prototype.get_last_center = function() {
 	: this.crossbar.model.position.clone();
 	return last_center;
 	*/
+};
+
+PositionTracker.prototype.fix_missing_dot2 = function(ir_dots, center) {
 };
 
 PositionTracker.prototype.fix_missing_dot3 = function(ir_dots, center) {
@@ -1076,10 +1095,67 @@ PositionTracker.prototype.update = function() {
 	}
 
 	var result;
-	if (false && new_cnt === 2 && this.record && this.record.frame === this.frame_cnt) {
-		/*
-			edge or diagonal?
-		*/
+	if (ir_dots.length === 4 && new_cnt === 2 && this.record && this.record.frame === this.frame_cnt) {
+		// edge or diagonal?
+		// 2 diagonals
+		// 4 edges
+
+		// diagonal
+		// edges
+		var real_dots = [];
+		var real_dots_i = [];
+		var other_dots = [];
+		for (var i=0; i<4; i++) {
+			var dot = ir_dots[i];
+			if (!dot.guess) {
+				real_dots.push(dot);
+				real_dots_i.push(i);
+			} else {
+				other_dots.push(i);
+			}
+		}
+		this.debug_line(real_dots[0].world_pos, real_dots[1].world_pos, 0xff0000);
+
+		// try brute force
+		var is_diagonal = true;
+		var last_center = this.get_last_center();
+		var diag = find_diagonal(ir_dots, ir_rays, last_center);
+		if (diag) {
+			result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+		}
+		var best_test_euler = test_euler.clone();
+		var center_screen_pos = world_to_screen(result.center);
+		var diag_center_screen_pos = world_to_screen(last_center);	
+		var dist1 = center_screen_pos.distanceTo(diag_center_screen_pos);
+
+		for (k=0; k<2; k++) {
+			test_euler.set(0,0,0);
+			var i = real_dots_i[0];
+			var j = real_dots_i[1];
+			var min_dir2 = ir_rays[i].clone().cross(ir_rays[j]);
+			var r1 = ir_rays[i];
+			var r2 = ir_rays[j];
+			var r3 = ir_rays[other_dots[k]];
+			var result2 = this.optimize(iter_max, min_dir2, r1, r2, r3);
+			var center2_screen_pos = world_to_screen(result2.center);
+			var dist2 = center2_screen_pos.distanceTo(diag_center_screen_pos);
+
+			if (dist2 < dist1) {
+				result = result2;
+				dist1 = dist2;
+				best_test_euler = test_euler.clone();
+				is_diagonal = false;
+			}
+		}
+		console.log(is_diagonal?'diag':'edge',dist1);
+
+		this.fix_missing_dot2(ir_dots, result.center);
+		var center = result.center;
+		this.debug_dot(center, 0x00ffff, 5);
+		this.debug_crossbar.model.position.copy(center);
+		this.crossbar.model.position.copy(center);
+		controls.target.copy(center);
+
 	} else if (ir_dots.length===4 && new_cnt === 3 && this.record && this.record.frame === this.frame_cnt) {
 		/* 
 			3 edges, multiple possibilities
@@ -1104,7 +1180,7 @@ PositionTracker.prototype.update = function() {
 
 //				console.log('colinear 3', diag.i, diag.j);
 			} else {
-				console.warn('4 dot error: failed to find diagonal');
+				console.warn('3 dot error: failed to find diagonal');
 			}
 
 //			if (result.center.z > -20)
@@ -1346,7 +1422,7 @@ PositionTracker.prototype.update = function() {
 		this.debug_dot(result.world_pos2, 0x00dd00, 5);
 
 		var center = result.center;
-		this.temp_debug_dot(center, 0x00ffff, 0.2);
+		this.debug_dot(center, 0x00ffff, 5);
 		this.debug_crossbar.model.position.copy(center);
 		this.crossbar.model.position.copy(center);
 		controls.target.copy(center);
@@ -1427,7 +1503,7 @@ PositionTracker.prototype.update = function() {
 								var r1 = ir_rays[i];
 								var r2 = ir_rays[j];
 								var r3 =  ir_rays[other_dots[k]];
-								var result2 = this.optimize(1, min_dir2, r1, r2, r3);
+								var result2 = this.optimize(iter_max, min_dir2, r1, r2, r3);
 								var center2_screen_pos = world_to_screen(result2.center);
 
 								var dist2 = center2_screen_pos.distanceTo(diag_center_screen_pos);
@@ -1665,6 +1741,8 @@ var render = function () {
 		camera_saved = camera.clone();
 		first_render = false;
 	}
+
+	position_tracker.clear_debug();
 
 //	camera_saved.lookAt(position_tracker.crossbar.model.position);
 //	controls.update();
