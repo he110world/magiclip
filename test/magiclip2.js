@@ -59,6 +59,8 @@ var ghead = new Vector3();
 var ahead = new Vector3();
 
 var qrel = new Quaternion();
+var grel = new Vector3;
+var arel = new Vector3;
 
 var clip_angle = 0;
 var irMask = new Buffer(1);
@@ -176,7 +178,24 @@ function DebugCrossBar () {
 	this.add_line('xbar_neg', new Vector3(-BAR_LENGTH/2,0,0), new Vector3(0,0,0), 0x770000);
 	this.add_line('ybar_neg', new Vector3(0,-BAR_LENGTH/2,0), new Vector3(0,0,0), 0x007700);
 	this.add_line('handle', new Vector3(0,0,0), new Vector3(0,0,-HANDLE_LENGTH), colors[2]);
+
+	this.init_pos = [
+		new Vector3(-BAR_LENGTH/2, 0, 0), 
+		new Vector3(0, -BAR_LENGTH/2, 0),
+		new Vector3(BAR_LENGTH/2, 0, 0),
+		new Vector3(0, BAR_LENGTH/2, 0)];
+
+	this.pos = [];
+	this.pos_predict = [];
+
+	for (var i=0; i<4; i++) {
+		this.pos[i] = this.init_pos[i].clone();
+		this.pos_predict[i] = this.pos[i].clone();
+	}
+
 	scene.add(this.model);
+
+	this.q = new Quaternion;
 }
 
 DebugCrossBar.prototype.add_line = function(name, p1, p2, color) {
@@ -208,9 +227,42 @@ DebugCrossBar.prototype.add_line = function(name, p1, p2, color) {
 	this.model.add(this.mesh[name]);
 };
 
+var old_t = Date.now();
 DebugCrossBar.prototype.update_rotation = function(q) {
 	this.q = q.clone();
 	this.model.setRotationFromQuaternion(this.q);
+	var new_t = Date.now();
+	var dt = new_t - old_t;
+	old_t = new_t;
+	dt /= 1000;
+
+	if (dt > 0.1) {
+		for (var i=0; i<4; i++) {
+			var prev_pos = this.pos[i].clone();
+
+			this.pos[i] = this.init_pos[i].clone();
+			this.pos[i].applyQuaternion(this.q);
+			this.pos[i].add(this.model.position);
+
+			this.pos_predict[i] = this.pos[i].clone();
+		}
+	} else {
+		var gyro = new Quaternion(grel.x*dt, grel.y*dt, grel.z*dt, 1).normalize();
+		for (var i=0; i<4; i++) {
+			var prev_pos = this.pos[i].clone();
+
+			this.pos[i] = this.init_pos[i].clone();
+			this.pos[i].applyQuaternion(this.q);
+			this.pos[i].add(this.model.position);
+
+			var pos = this.pos[i].clone();
+			var fake_v = pos.clone().sub(prev_pos).multiplyScalar(1/dt).add(arel.clone().multiplyScalar(dt));	// ds/dt
+
+			this.pos_predict[i] = pos.add(fake_v.multiplyScalar(dt).applyQuaternion(gyro));
+		}
+	}
+
+
 };
 
 function CrossBar () {
@@ -271,6 +323,7 @@ CrossBar.prototype.update_rotation = function(q) {
 	for (var i=0; i<4; i++) {
 		this.pos[i] = this.init_pos[i].clone();
 		this.pos[i].applyQuaternion(this.q);
+		this.pos[i].add(this.model.position);
 	}
 };
 
@@ -353,10 +406,12 @@ CrossBar.prototype.update_sensor = function(data) {
 		}
 
 		var qh = qhead.clone();
-		var test_q = new Quaternion;
-		test_q.setFromAxisAngle(new Vector3(0,0,1), test_rot);
+		//var test_q = new Quaternion;
+		//test_q.setFromAxisAngle(new Vector3(0,0,1), test_rot);
 		qrel.multiplyQuaternions(qh.conjugate(), qclip);
-		qrel.multiply(test_q);
+		grel.subVectors(gclip, ghead);
+		arel.subVectors(aclip, ahead);
+		//qrel.multiply(test_q);
 	}
 };
 
@@ -1568,12 +1623,16 @@ PositionTracker.prototype.update = function() {
 
 	this.crossbar.update_rotation(qrel);
 	this.debug_crossbar.update_rotation(qrel);
+
 	++this.frame_cnt;
 
 	// save for later use
 	this.record = {frame:this.frame_cnt, ir_dots:ir_dots};
 	if (center) {
 		this.record.center = center.clone();
+		for (var i=0; i<4; i++) {
+			this.debug_line(this.debug_crossbar.pos[i], this.debug_crossbar.pos_predict[i], 0xfff000 + i);
+		}
 	}
 
 //	console.log(new_cnt);
