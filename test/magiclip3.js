@@ -1,54 +1,82 @@
-var THREE = require('./three.js');
-var OrbitControls = require('three-orbit-controls')(THREE);
-var SimpleDatGui = require('three-dat-gui')(THREE, THREE.document);
-//var Canvas = require('canvas');
-//THREE.canvas = new Canvas(256,256);
+var is_node_js = typeof window === 'undefined';
+
+if (is_node_js) {
+	var THREE = require('./three.js');
+	document = THREE.document;
+	var OrbitControls = require('three-orbit-controls')(THREE);
+	var SimpleDatGui = require('three-dat-gui')(THREE, document);
+	//var Canvas = require('canvas');
+	//THREE.canvas = new Canvas(256,256);
+	var SerialPort = require('serialport');
+	var fs = require('fs');
+	var net = require('net');
+	var WII_ADDRESS = '/var/tmp/wii.sock';
+	//var regression = require('regression');
+	//var JPEG = require('jpeg-js');
+	//var btoa = require('btoa');
+	var math = require('mathjs');
+
+	var express = require('express');
+	var app = express();
+	var expressWs = require('express-ws')(app);
+	app.set('view engine', 'pug');
+
+	var record_name = process.argv[2];
+	requestAnimationFrame = THREE.requestAnimationFrame;
+} else {
+	var record_name = null;
+	var OrbitControls = THREE.OrbitControls;
+	var global = window;
+}
 var Quaternion = THREE.Quaternion;
 var Vector2 = THREE.Vector2;
 var Vector3 = THREE.Vector3;
-var SerialPort = require('serialport');
-var fs = require('fs');
-var net = require('net');
-var WII_ADDRESS = '/var/tmp/wii.sock';
-var regression = require('regression');
-var JPEG = require('jpeg-js');
-var btoa = require('btoa');
-var math = require('mathjs');
-
-var express = require('express');
-var app = express();
-var expressWs = require('express-ws')(app);
-app.set('view engine', 'pug');
-
 var width = 1024, height = 768;
+var g_record = false;
+var record_frame = 0;
+var ir_record;
+var imu_record;
+var current_ir_data;
+var current_imu_data;
 
-// unix socket
-var server = net.createServer(function(sock) {
-	sock.on('data', function(data){
-		position_tracker.update_ir_sensor(data);
-	});
-});
-
-server.on('error', function(e){
-	if (e.code == 'EADDRINUSE') {
-		var testsock = new net.Socket();
-		testsock.on('error', function(e) { // handle error trying to talk to server
-			if (e.code == 'ECONNREFUSED') {  // No other server listening
-				fs.unlinkSync(WII_ADDRESS);
-				server.listen(WII_ADDRESS, function() { //'listening' listener
-					console.log('server recovered');
-				});
-			}
-		});
-		testsock.connect({path: WII_ADDRESS}, function() { 
-			console.log('Server running, giving up...');
-			process.exit();
-		});
+if (record_name) {
+	if (is_node_js) {
+		ir_record = require(record_name+'.ir.json');
+		imu_record = require(record_name+'.imu.json');
 	}
-});
+	if (!isNaN(process.argv[3])) {
+		record_frame = Math.max(0, Math.min(Number(process.argv[3]), ir_record.length, imu_record.length) - 1);
+	}
+}
 
-server.listen(WII_ADDRESS);
+if (is_node_js && !ir_record) {
+	// unix socket
+	var server = net.createServer(function(sock) {
+		sock.on('data', function(data){
+			position_tracker.update_ir_sensor(data);
+		});
+	});
 
+	server.on('error', function(e){
+		if (e.code == 'EADDRINUSE') {
+			var testsock = new net.Socket();
+			testsock.on('error', function(e) { // handle error trying to talk to server
+				if (e.code == 'ECONNREFUSED') {  // No other server listening
+					fs.unlinkSync(WII_ADDRESS);
+					server.listen(WII_ADDRESS, function() { //'listening' listener
+						console.log('server recovered');
+					});
+				}
+			});
+			testsock.connect({path: WII_ADDRESS}, function() { 
+				console.log('Server running, giving up...');
+				process.exit();
+			});
+		}
+	});
+
+	server.listen(WII_ADDRESS);
+}
 // serial ports
 // head & clip orientations
 var qclip = new Quaternion();
@@ -64,30 +92,33 @@ var grel = new Vector3;
 var arel = new Vector3;
 
 var clip_angle = 0;
-var irMask = new Buffer(1);
+//var irMask = new Buffer(1);
 
-irMask[0] = 0xff;
+//irMask[0] = 0xff;
 
-SerialPort.list(function(err,ports){
-	ports.forEach(function(port_info){
-		if (port_info.productId == 0x7523) {	// arduino?
-			var port = new SerialPort(port_info.comName, {baudRate:115200, parser: SerialPort.parsers.byteDelimiter([13,10])});
+if (is_node_js && !imu_record) {
+	SerialPort.list(function(err,ports){
+		ports.forEach(function(port_info){
+			if (port_info.productId == 0x7523) {	// arduino?
+				var port = new SerialPort(port_info.comName, {baudRate:115200, parser: SerialPort.parsers.byteDelimiter([13,10])});
 
-			port.on('open', function(){
-				console.log('port',port_info.comName,'opened');
-			});
+				port.on('open', function(){
+					console.log('port',port_info.comName,'opened');
+				});
 
-			port.on('data', function(data){
-				position_tracker.update_imu_sensor(data);
-			});
-		}
+				port.on('data', function(data){
+					position_tracker.update_imu_sensor(data);
+				});
+			}
+		});
 	});
-});
+}
 
 // config
 var config = {
 	show_model : false,
-	enable_correction : true 
+	enable_correction : true,
+	single_step : false
 };
 // renderer
 var renderer = new THREE.WebGLRenderer({
@@ -96,7 +127,11 @@ var renderer = new THREE.WebGLRenderer({
 });
 //renderer.autoClear = false;	// for GUI pass
 
-THREE.document.setTitle('magiclip');
+if (is_node_js) {
+	document.setTitle('magiclip');
+} else {
+	renderer.setSize(width, height);
+}
 
 // scene
 var scene = new THREE.Scene();
@@ -109,7 +144,7 @@ var camera = new THREE.PerspectiveCamera(63, 56/38, 0.01, 100);
 camera.position.set(0,0,1);
 var camera_saved = camera.clone();
 
-var controls = new OrbitControls(camera, THREE.document);
+var controls = new OrbitControls(camera, is_node_js ? document : renderer.domElement);
 //controls.zoomSpeed = 0.1;
 //controls.rotateSpeed = 0.1;
 
@@ -452,7 +487,30 @@ CrossBar.prototype.update_sensor = function(data) {
 		grel.subVectors(gclip, ghead);
 		arel.subVectors(aclip, ahead);
 		//qrel.multiply(test_q);
+
+		//FUCK
+		current_imu_data = {type:data[2], q:q, g:g, a:a};
 	}
+};
+
+CrossBar.prototype.update_sensor_record = function(frame) {
+	var q = new Quaternion(frame.q._x, frame.q._y, frame.q._z, frame.q._w);
+	var g = frame.g;
+	var a = frame.a;
+
+	if (frame.type == 1) {	// clip
+		qclip.copy(q);
+		gclip.copy(g);
+		aclip.copy(a);
+	} else {
+		qhead.copy(q);
+		ghead.copy(g);
+		ahead.copy(a);
+	}
+	var qh = qhead.clone();
+	qrel.multiplyQuaternions(qh.conjugate(), qclip);
+	grel.subVectors(gclip, ghead);
+	arel.subVectors(aclip, ahead);
 };
 
 // IR dots
@@ -536,6 +594,10 @@ IRDots.prototype.update_sensor = function(data) {
 			return;
 		}
 		var dot_raw = JSON.parse(dot_str[0]);
+
+		//FUCK
+		current_ir_data = dot_raw;
+
 		var dots = [], scores = [], slots = [];
 		for (var i=0; i<dot_raw.length; i+=3) {
 			if (dot_raw[i+1] > 560) continue;	//FUCK: some BAD dots' y>570 ... vertical mirror of some dots
@@ -623,7 +685,7 @@ IRDots.prototype.update_dot = function(dot) {
 			newest.world_pos.copy(dot.world_pos);
 			newest.screen_pos.copy(dot.screen_pos);
 			this.mesh.dots[dot.idx].position.copy(dot.world_pos);
-//			this.mesh.dots[dot.idx].visible = false;
+			this.mesh.dots[dot.idx].visible = true;
 		}
 	}
 };
@@ -696,48 +758,52 @@ DebugLine.prototype.set_pos = function(p1, p2) {
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
-function Sampler (name) {
-	this.name = name || 'unnamed';
-	this.write_stream = fs.createWriteStream(this.name + '.json');
-	this.write_stream.write('[');
-	this.written = false;
-	var scope = this;
-	process.on('exit', function(){
-		scope.close();
-	});
+if (is_node_js) {
+	function Sampler (name) {
+		this.name = name || 'unnamed';
+		this.written = false;
+		var scope = this;
+		process.on('exit', function(){
+			scope.close();
+		});
+	}
+
+	Sampler.prototype.log = function(samp) {
+		if (!this.enabled) return;
+
+		if (!this.write_stream) {
+			this.write_stream = fs.createWriteStream(this.name + '.json');
+			this.write_stream.write('[');
+		}
+
+		var str;
+		if (typeof samp === 'object') {
+			str = JSON.stringify(samp);
+		} else {
+			str = samp.toString();
+		}
+		if (this.written) {
+			str = ',\n' + str;
+		} else {
+			this.written = true;
+		}
+		this.write_stream.write(str);
+	};
+
+	Sampler.prototype.close = function() {
+		if (this.write_stream)
+			this.write_stream.end(']');
+	};
+
+	Sampler.prototype.enable = function(e) {
+		this.enabled = e;
+	};
+
+	//var sampler = new Sampler('orientation-error');
+	var sampler_prefix = new Date().toJSON().substr(0,19).replace(/:/g,'-');
+	var ir_sampler = new Sampler(sampler_prefix+'.ir');
+	var imu_sampler = new Sampler(sampler_prefix+'.imu');
 }
-
-Sampler.prototype.log = function(samp) {
-	if (!this.is_ready) return;
-
-	var str;
-	if (typeof samp === 'object') {
-		str = JSON.stringify(samp);
-	} else {
-		str = samp.toString();
-	}
-	if (this.written) {
-		str = ',\n' + str;
-	} else {
-		this.written = true;
-	}
-	this.write_stream.write(str);
-};
-
-Sampler.prototype.flush = function(samp) {
-	this.log(samp);
-	this.is_ready = false;
-};
-
-Sampler.prototype.close = function() {
-	this.write_stream.end(']');
-};
-
-Sampler.prototype.ready = function() {
-	this.is_ready = true;
-};
-
-var sampler = new Sampler('orientation-error');
 
 //////////////////////////////////////////////////////////////////////////////////////////
 var RANGE = 100;
@@ -755,6 +821,8 @@ function PositionTracker () {
 
 PositionTracker.prototype.toggle_show_correction = function() {
 	config.show_correction = !config.show_correction;
+	this.crossbar.update_rotation(qrel);
+	this.debug_crossbar.update_rotation(qrel);
 };
 
 PositionTracker.prototype.clear_debug = function() {
@@ -845,7 +913,7 @@ var last_sz = 1;
 var MAX_ITER_CNT = 100;
 var COLINEAR_THRESH = 0.99;
 
-PositionTracker.prototype.optimize_diagnal = function(iter_max, ray1, ray2, diag_dir) {
+PositionTracker.prototype.optimize_diagonal = function(iter_max, ray1, ray2, diag_dir) {
 	var rad = Math.acos(ray1.dot(ray2));
 	var rad1 = Math.PI - Math.acos(ray1.dot(diag_dir));
 	var rad2 = Math.acos(ray2.dot(diag_dir));
@@ -953,7 +1021,12 @@ PositionTracker.prototype.optimize_rot = function(iter_max, center, ir_dots, ini
 //		console.log(dot_screen_pos);
 		for (var i=0; i<4; i++) {
 			var j = min_map[i];
-			err += ir_dots[i].screen_pos.distanceToSquared(dot_screen_pos[j]);
+			var dsp = dot_screen_pos[j];
+			if (!dsp) {
+				console.log(dot_screen_pos, test_rot, init_pos, q, center);
+			} else {
+				err += ir_dots[i].screen_pos.distanceToSquared(dsp);
+			}
 		}
 //		console.log(err);
 		if (err < min_err) {
@@ -1056,7 +1129,7 @@ PositionTracker.prototype.optimize = function(iter_max, ray1, ray2, ray3, collap
 			if (collapsed) {
 				var offset = world_pos2.clone().sub(world_pos1);
 				var div;
-				if (world_pos1.distanceToSquared(camera_saved.position) < world_pos2.distanceToSquared(camera_saved.position)) {
+				if (world_pos1.z > world_pos2.z) {
 					div = 2/3;
 				} else {
 					div = 1/3;
@@ -1217,7 +1290,37 @@ PositionTracker.prototype.get_last_center = function() {
 PositionTracker.prototype.fix_missing_dot2 = function(ir_dots, center) {
 };
 
-PositionTracker.prototype.fix_missing_dot3 = function(ir_dots, center) {
+PositionTracker.prototype.fix_collapse3 = function(ir_dots, center, min_dot_tuple) {
+	var i = min_dot_tuple[0];
+	var j = min_dot_tuple[1];
+	var i2 = (i+2)%4;
+	var j2 = (j+2)%4;
+};
+
+PositionTracker.prototype.fix_missing_dot3 = function(ir_dots, result) {
+	for (var i=0; i<4; i++) {
+		var dot = ir_dots[i];
+		if (dot.guess) {
+			var opposite_dot = ir_dots[(i+2)%4];
+			var spos1 = world_to_screen(result.world_pos1);
+			var spos2 = world_to_screen(result.world_pos2);
+			var d1 = opposite_dot.screen_pos.distanceToSquared(spos1);
+			var d2 = opposite_dot.screen_pos.distanceToSquared(spos2);
+			var missing_world_pos = result.center.clone().multiplyScalar(2);
+			if (d1 < d2) {	// world1 is opposite
+				missing_world_pos.sub(result.world_pos1);
+			} else {
+				missing_world_pos.sub(result.world_pos2);
+			}
+			dot.screen_pos = world_to_screen(missing_world_pos);
+			dot.world_pos = screen_to_world(dot.screen_pos);
+			this.ir_dots.update_dot(dot);
+			break;
+		}
+	}
+};
+
+PositionTracker.prototype.fix_missing_dot3_old = function(ir_dots, result) {
 	var missing_screen_pos = world_to_screen(center).multiplyScalar(4);
 	var missing_dot;
 	for (var i=0; i<4; i++) {
@@ -1321,6 +1424,13 @@ function collapse4to3 (old_4dots, new_3dots) {
 
 }
 
+PositionTracker.prototype.update_record = function(frame_idx) {
+	this.ir_dots.update_sensor(JSON.stringify(ir_record[frame_idx]));
+	this.crossbar.update_sensor_record(imu_record[frame_idx]);
+	this.clear_debug();
+	this.update();
+};
+
 var old_cnt = 0;
 var min_dot_tuple;
 var collapsed_i;
@@ -1328,6 +1438,12 @@ PositionTracker.prototype.update = function() {
 	// point matching
 	var ir_dots = this.ir_dots.get_current();
 	if (ir_dots.length === 0) return;
+
+	// log
+	if (is_node_js) {
+		ir_sampler.log(current_ir_data);
+		imu_sampler.log(current_imu_data);
+	}
 
 	// find 'fresh' IR dots
 	var new_cnt = 0;
@@ -1419,15 +1535,15 @@ PositionTracker.prototype.update = function() {
 				other_dots.push(i);
 			}
 		}
-		this.debug_line(real_dots[0].world_pos, real_dots[1].world_pos, 0xff0000);
 
 		// try brute force
 		var is_diagonal = true;
 		var last_center = this.get_last_center();
 		var diag = find_diagonal(ir_dots, ir_rays, last_center);
 		if (diag) {
-			result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+			result = this.optimize_diagonal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 		}
+		/*
 		var best_test_euler = test_euler.clone();
 		var center_screen_pos = world_to_screen(result.center);
 		var diag_center_screen_pos = world_to_screen(last_center);	
@@ -1452,10 +1568,13 @@ PositionTracker.prototype.update = function() {
 			}
 		}
 		console.log(is_diagonal?'diag':'edge',dist1);
-
+		*/
 		this.fix_missing_dot2(ir_dots, result.center);
 		var center = result.center;
 		this.debug_dot(center, 0x00ffff, 5);
+		this.debug_dot(result.world_pos1, 0xdd0000, 5);
+		this.debug_dot(result.world_pos2, 0x00dd00, 5);
+		this.debug_line(result.world_pos1, result.world_pos2, 0xff0000);
 		this.debug_crossbar.model.position.copy(center);
 		this.crossbar.model.position.copy(center);
 		controls.target.copy(center);
@@ -1480,7 +1599,7 @@ PositionTracker.prototype.update = function() {
 			var last_center = this.get_last_center();
 			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
-				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+				result = this.optimize_diagonal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 
 				console.log('colinear 3', diag.i, diag.j);
 			} else {
@@ -1491,7 +1610,9 @@ PositionTracker.prototype.update = function() {
 //				console.log('3 colinear',result.center);
 
 			// fix missing dots
-			this.fix_missing_dot3(ir_dots, result.center);
+//			this.fix_missing_dot3(ir_dots, result.center);
+
+
 /*			var missing_screen_pos = world_to_screen(result.center).multiplyScalar(4);
 			var missing_dot;
 			for (var i=0; i<4; i++) {
@@ -1740,7 +1861,7 @@ PositionTracker.prototype.update = function() {
 				var diag = find_diagonal(ir_dots, ir_rays, last_center);
 				if (diag) {
 					// try colinear
-					var result3 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+					var result3 = this.optimize_diagonal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 					var center3_screen_pos = world_to_screen(result3.center);
 					var dist3 = center3_screen_pos.distanceTo(diag_center_screen_pos);
 					if (dist3 < dist1) {
@@ -1766,7 +1887,11 @@ PositionTracker.prototype.update = function() {
 
 			// fix missing dot
 			//if (dist1 < 10) {
-				this.fix_missing_dot3(ir_dots, result.center);
+			if (this.collapsed) {
+				this.fix_collapse3(ir_dots, result.center, min_dot_tuple);
+			} else {
+				this.fix_missing_dot3(ir_dots, result);
+			}
 			//}
 /*			var missing_pos = result.center.clone().multiplyScalar(2);
 			if (d3.guess) {// dot 3 missing: d3 = 2*center - d1
@@ -1801,7 +1926,7 @@ PositionTracker.prototype.update = function() {
 			var last_center = this.get_last_center();
 			var diag = find_diagonal(ir_dots, ir_rays, last_center);
 			if (diag) {
-				result = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+				result = this.optimize_diagonal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 //				console.log('colinear 4');
 			} else {
 				console.warn('4 dot error: failed to find diagonal');
@@ -1898,7 +2023,7 @@ PositionTracker.prototype.update = function() {
 				var diag = find_diagonal(ir_dots, ir_rays, last_center);
 				if (diag) {
 					// try colinear
-					var result3 = this.optimize_diagnal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
+					var result3 = this.optimize_diagonal(1, ir_rays[diag.i], ir_rays[diag.j], diag.dir);
 					var center3_screen_pos = world_to_screen(result3.center);
 					var dist3 = center3_screen_pos.distanceTo(diag_center_screen_pos);
 					if (dist3 < dist1) {
@@ -2036,7 +2161,7 @@ function off(element, name, callback) {
   element.removeEventListener(name, callback);
 }
 
-on(THREE.document, 'keydown', function(e) {
+on(document, 'keydown', function(e) {
 //  console.log('keydown: '+require('util').inspect(e));
   if (!e.altKey && !e.ctrlKey && !e.metaKey) {
     var key = mapKeyCode(e.keyCode);
@@ -2045,7 +2170,7 @@ on(THREE.document, 'keydown', function(e) {
   }
 });
 
-on(THREE.document, 'keyup', function(e) {
+on(document, 'keyup', function(e) {
   if (!e.altKey && !e.ctrlKey && !e.metaKey) {
     var key = mapKeyCode(e.keyCode);
     if (key) keys[key] = false;
@@ -2053,17 +2178,29 @@ on(THREE.document, 'keyup', function(e) {
   }
 });
 
-function bind_key_func (key, func) {
+function bind_key_func (key, func, keep) {
 	key = key.toUpperCase();
 	if (keys[key]) {
 		func();
-		keys[key] = false;
+		keys[key] = keep || false;
 	}
 }
 
+var monitor_list = {};
+var monitor_last = {};
+function monitor (name, cb) {
+	if (typeof cb === 'function')
+		monitor_list[name] = cb;
+}
+
+function unmonitor (name) {
+	delete monitor_list[name];
+}
+
 var first_render = true;
+
 var render = function () {
-	THREE.requestAnimationFrame(render);
+	requestAnimationFrame(render);
 
 	/*
 	cube.setRotationFromQuaternion(qrel);
@@ -2079,8 +2216,6 @@ var render = function () {
 	cube.position.copy(test_center);
 	*/
 
-	position_tracker.update();
-
 	bind_key_func('m', function(){
 		config.show_model = !config.show_model;
 		position_tracker.toggle_debug();
@@ -2095,8 +2230,32 @@ var render = function () {
 	});
 
 	bind_key_func('r', function(){
+		var old_target = controls.target.clone();
 		controls.reset();
+		controls.target.copy(old_target);
 	});
+
+	bind_key_func('l', function(){
+		if (is_node_js && !ir_record && !imu_record) {
+			g_record = !g_record;
+			ir_sampler.enable(g_record);
+			imu_sampler.enable(g_record);
+			console.log('sampler', g_record?'enabled':'disabled');
+			renderer.setClearColor(g_record?0x440000:0x000000);
+		}
+	});
+
+	bind_key_func('n', function(){
+		if (ir_record && imu_record && record_frame<ir_record.length-1 && record_frame<imu_record.length-1) {
+			position_tracker.update_record(++record_frame);
+		}
+	}, !config.single_step);
+
+	bind_key_func('b', function(){
+		if (ir_record && imu_record && record_frame>0 && record_frame>0) {
+			position_tracker.update_record(--record_frame);
+		}
+	}, !config.single_step);
 
 /*
 	if (keys['A']) {
@@ -2142,7 +2301,12 @@ var render = function () {
 	*/
 //	gui.update();//{position:screen_to_world(new Vector2(width/2,height/2), camera)});
 //	renderer.clear();
+	if (!ir_record) {
+		position_tracker.clear_debug();
+		position_tracker.update();
+	}
 	renderer.render(scene, camera);
+
 //	renderer.clearDepth();
 //	renderer.render(gui_scene, gui_camera);
 	if (first_render) {
@@ -2150,37 +2314,48 @@ var render = function () {
 		first_render = false;
 	}
 
-	position_tracker.clear_debug();
+	// update monitor
+	for (var m in monitor_list) {
+		var last = monitor_last[m];
+		var now = global[m];
+		if (typeof now !== 'undefined' && now !== last) {
+			monitor_list[m]();
+			monitor_last[m] = now;
+		}
+	}
+
 
 //	camera_saved.lookAt(position_tracker.crossbar.model.position);
 //	controls.update();
 };
 
-app.ws('/test', function(ws, req) {
-	ws.on('message', function(msg) {
-		if (msg === 'init') {
-			ws.send(JSON.stringify({fov:camera.fov, aspect:camera.aspect, strength:fish_calib.strength, zoom:fish_calib.zoom, 
-				euler_x:test_euler.x,euler_y:test_euler.y,euler_z:test_euler.z,test_rot:test_rot
-			}));
-		} else {
-			var type_val = msg.split(':');
-			var type = type_val[0];
-			var val = Number(type_val[1]);
-			console.log(type,val);
-			if (type === 'fov' || type === 'aspect') {
-				update_camera(type, val);
-			} else if (type === 'strength' || type === 'zoom') {
-				fish_calib[type] = val;
-			} else if (type === 'euler_x' || type === 'euler_y' || type === 'euler_z') {
-				var axis = type.split('_')[1];
-				test_euler[axis] = val;
-			} else if (type === 'test_rot') {
-				test_rot = val;
+if (is_node_js) {
+	app.ws('/test', function(ws, req) {
+		ws.on('message', function(msg) {
+			if (msg === 'init') {
+				ws.send(JSON.stringify({fov:camera.fov, aspect:camera.aspect, strength:fish_calib.strength, zoom:fish_calib.zoom, 
+					euler_x:test_euler.x,euler_y:test_euler.y,euler_z:test_euler.z,test_rot:test_rot
+				}));
+			} else {
+				var type_val = msg.split(':');
+				var type = type_val[0];
+				var val = Number(type_val[1]);
+				console.log(type,val);
+				if (type === 'fov' || type === 'aspect') {
+					update_camera(type, val);
+				} else if (type === 'strength' || type === 'zoom') {
+					fish_calib[type] = val;
+				} else if (type === 'euler_x' || type === 'euler_y' || type === 'euler_z') {
+					var axis = type.split('_')[1];
+					test_euler[axis] = val;
+				} else if (type === 'test_rot') {
+					test_rot = val;
+				}
 			}
-		}
+		});
 	});
-});
 
-app.listen(3000);
+	app.listen(3000);
+}
 render();
 

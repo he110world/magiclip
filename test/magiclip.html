@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<style>
+		canvas { width: 1024px; height: 768px; }
+		.row {display: flex;}
+		.col {display: flex; flex-flow: column;}
+	</style>
+	<script src="browser/three.js"></script>
+	<script src="browser/OrbitControls.js"></script>
+	<script src="browser/jquery.js"></script>
+	<script src="browser/math.js"></script>
+	<script src="browser/flexboxDetective.min.js"></script>
+</head>
+
+<body>
+
+	<div class="row">
+		<div class="col" id="canvas"></div>
+		<div class="col" style="margin: 5px;">
+			<label><input type="checkbox" name="single_step" onchange="single_step(this)">single step</label>
+			<div class="row">1</div>
+			<div class="row">1</div>
+			<div class="row">1</div>
+			<div class="row">1</div>
+			<div class="row">1</div>
+		</div>
+	</div>
+	<div class="row">
+		<input id="load-record" type="file" name="input-name" onchange="load_record(this)">
+	</div>
+
+	<script src="magiclip3.js"></script>
+	<script>
+		$('#canvas').append(renderer.domElement);
+
+		function load_record(input){
+			if (input.files && input.files[0]) {
+				var file_name = input.files[0].name;
+				var ir_name, imu_name;
+				if (file_name.indexOf('.ir.')!=-1) {
+					ir_name = file_name;
+					imu_name = file_name.replace('.ir.','.imu.');
+				} else {
+					ir_name = file_name.replace('.imu.','.ir.');
+					imu_name = file_name;
+				}
+				$.getJSON(ir_name, function(ir){
+					ir_record = ir;
+					$.getJSON(imu_name, function(imu){
+						imu_record = imu;
+					});
+				});
+				record_frame = 0;
+			}
+		}
+
+		function single_step(input) {
+			config.single_step = input.checked;
+		}
+
+		monitor('record_frame', function(){console.log(record_frame)});
+	</script>
+
+</body>
+</html>
